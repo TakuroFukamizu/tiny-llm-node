@@ -1,5 +1,7 @@
 # tiny-llm-node
 
+**Language:** English | [日本語](README_ja.md)
+
 Ultra-compact GPU LLM node powered by Raspberry Pi 5 and USB-PD.
 
 tiny-llm-node is a portable local LLM inference node designed to run modern open-weight models on a small, power-efficient GPU using Raspberry Pi 5 as the host.
@@ -103,4 +105,3 @@ software_setup.md
 ## License
 
 MIT
-

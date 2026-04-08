@@ -1,5 +1,7 @@
 # tiny-llm-node
 
+**Language:** [English](README.md) | 日本語
+
 Raspberry Pi 5 と USB-PD で動作する超小型 GPU LLM ノード。
 
 tiny-llm-node は、Raspberry Pi 5 をホストとして使用し、小型で電力効率の高い GPU 上で最新のオープンウェイトモデルを動かすために設計された、持ち運び可能なローカル LLM 推論ノードです。
