@@ -9,14 +9,10 @@ The GPU performs LLM inference.
 ---
 
 ## Block Diagram
-```
-Raspberry Pi 5
-│ PCIe Gen3 x1
-▼
-X1010 PCIe board
-│ PCIe x4 slot
-▼
-GPU
+```mermaid
+graph TD
+    A[Raspberry Pi 5] -- "PCIe Gen3 x1" --> B[X1010 PCIe board]
+    B -- "PCIe x4 slot" --> C[GPU]
 ```
 
 ---

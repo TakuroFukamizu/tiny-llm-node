@@ -12,15 +12,13 @@ single-cable power input.
 
 ## Power chain
 
-USB-PD power supply
-↓
-PD trigger (28V output)
-↓
-DC-DC converter (28V → 12V)
-↓
-X1010
-↓
-GPU + Raspberry Pi
+```mermaid
+graph TD
+    A[USB-PD power supply] --> B["PD trigger (28V output)"]
+    B --> C["DC-DC converter (28V → 12V)"]
+    C --> D[X1010]
+    D --> E[GPU + Raspberry Pi]
+```
 
 ---
 

@@ -32,16 +32,13 @@ USB-PD だけで給電される小型 GPU ノード上で、ローカル LLM を
 
 ## Architecture Overview
 
-```
-USB-PD 3.2 power source
-↓
-PD trigger (28V)
-↓
-DC-DC converter (28V → 12V)
-↓
-X1010 PCIe expansion board
-├── Raspberry Pi 5
-└── NVIDIA RTX GPU
+```mermaid
+graph TD
+    A[USB-PD 3.2 power source] --> B[PD trigger - 28V]
+    B --> C["DC-DC converter (28V → 12V)"]
+    C --> D[X1010 PCIe expansion board]
+    D --> E[Raspberry Pi 5]
+    D --> F[NVIDIA RTX GPU]
 ```
 
 ---
