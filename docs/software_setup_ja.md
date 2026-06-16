@@ -10,7 +10,7 @@ Raspberry Pi 5 に NVIDIA ドライバと LLM 実行環境をゼロから構築�
 
 ## 検証済み構成(凍結)
 
-ユーザースペースドライバ・カーネルモジュール・(任意の)CUDA Toolkit はバージョンを**厳密に一致**させる必要があります。この組み合わせは動作確認済みです。単一コンポーネントだけを安易に更新しないでください。
+ユーザースペースドライバとカーネルモジュールはバージョンを**厳密に一致**させる必要があります。任意の CUDA Toolkit を入れる場合は、LLM ランタイムの節で示すこの凍結構成向けのバージョンを使い、ドライバを置き換えないでください。
 
 | コンポーネント | バージョン | 備考 |
 |---|---|---|
@@ -38,7 +38,7 @@ Raspberry Pi Imager で Raspberry Pi OS(64-bit, Trixie)を書き込みます。I
 
 ```bash
 sudo apt update
-sudo apt install -y build-essential git linux-headers-rpi-v8
+sudo apt install -y build-essential git linux-headers-rpi-v8 pciutils wget curl ca-certificates
 ```
 
 `linux-headers-rpi-v8` は NVIDIA ドライバが要求する 4K ページカーネル用のヘッダを提供します。
@@ -137,7 +137,7 @@ sudo reboot
 ## 5. ドライバの確認
 
 ```bash
-lsmod | grep nvidia                       # nvidia, nvidia_uvm, nvidia_modeset がロード済み
+lsmod | grep nvidia                       # nvidia と nvidia_uvm がロード済みであること
 sudo dmesg | grep -iE 'nvrm|nvidia' | tail -20
 nvidia-smi
 ```
@@ -151,6 +151,7 @@ nvidia-smi
 dmesg の見方:
 
 - `NVRM: loading NVIDIA UNIX Open Kernel Module ... 580.95.05` → 正常
+- ヘッドレス CUDA 専用ノードでは `nvidia_modeset` がロードされない場合があります。ollama で重要なのは `nvidia` と `nvidia_uvm` です
 - `NVRM: Chipset not recognized (vendor ID 0x14e4, device ID 0x2712)` と "has not been qualified on this platform" → **無害**。Broadcom ホストブリッジに対する注意書き
 - `Cannot initialize GSP firmware RM` → 異常: 16K カーネルのまま、もしくは未パッチのモジュールがロードされている(トラブルシューティング参照)
 
@@ -181,7 +182,7 @@ nvidia-smi     # ollama プロセスが VRAM 約 5.5 GB を確保しているこ
 
 - **コールドスタート後の初回応答は遅い**(8B モデルで数分): モデルが PCIe x1 リンクを一度通過し、CUDA グラフがコンパイルされるため。2回目以降のロードは数秒で、推論はフル速度で走ります。性能は必ず2回目以降で測定してください
 - モデルは VRAM 内に収めること。CPU オフロードされたレイヤーは毎トークン x1 リンクを通過し、スループットが激減します。VRAM 8GB では 8B クラスの Q4 モデルが最適点
-- ollama に CUDA Toolkit は**不要**。自分で llama.cpp の CUDA ビルドをしたい場合のみ導入します(13.0.2、`linux_sbsa` runfile、コンポーネント選択で **"Driver" のチェックを外す**)
+- ollama に CUDA Toolkit は**不要**。自分で llama.cpp の CUDA ビルドをしたい場合のみ導入します。この凍結ドライバ構成では CUDA Toolkit 13.0.2(`linux_sbsa` runfile)を使い、コンポーネント選択で **"Driver" のチェックを外す** こと
 
 実測リファレンス(RTX 4060, qwen3:8b Q4, ウォーム時): **生成 43 tok/s、プロンプト評価 約 615 tok/s**。
 
@@ -202,7 +203,7 @@ nvidia-smi     # ollama プロセスが VRAM 約 5.5 GB を確保しているこ
 |---|---|---|
 | ビルド中に `fatal error: stdarg.h: No such file or directory` が大量発生 | `SYSSRC` を渡したため、Pi OS のヘッダ分割で conftest のヘッダ検出が壊れた | `SYSSRC` なしで再ビルド(クロスビルド時は `KERNEL_UNAME=` のみ)。先に `kernel-open/conftest` を掃除 |
 | dmesg に `Cannot initialize GSP firmware RM` | 16K カーネルのまま、または未パッチモジュールがロード | `getconf PAGE_SIZE` が 4096 であること。`modinfo nvidia \| grep filename` でどのモジュールが解決されるか確認 |
-| `nvidia-smi` が `No devices were found` | userspace とモジュールのバージョン不一致 | `cat /proc/driver/nvidia/version` と `nvidia-smi` のバージョンを照合 |
+| `nvidia-smi` が `No devices were found` | ドライバはロードされたが GPU 初期化に失敗。PCIe、GSP、デバイスノード、userspace/module 不一致などがあり得る | `lspci`、`dmesg`、`cat /proc/driver/nvidia/version`、`modinfo nvidia \| grep filename`、`/dev/nvidia*` の順に確認 |
 | モジュールビルドがヘッダ関連で失敗 | ヘッダが対象カーネルと不一致 | `uname -r` と `/lib/modules/` を照合。`linux-headers-rpi-v8` を再インストール |
 | 負荷時に GPU が消える / PCIe エラー多発 | Gen 3 リンク不安定 | `dtparam=pciex1_gen=2` に設定 |
 | `lspci` に何も出ない | ハードウェア: 配線、GPU 電源、投入順序 | セクション0 と [troubleshooting.md](troubleshooting.md) を参照 |

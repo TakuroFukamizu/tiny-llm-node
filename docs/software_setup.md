@@ -10,7 +10,7 @@ This guide is based on an actual build completed on 2026-06-12 (Pi 5 8GB + RTX 4
 
 ## Verified configuration (frozen)
 
-The userspace driver, kernel modules, and (optional) CUDA Toolkit must match versions **exactly**. This combination is verified working — do not upgrade any single component casually.
+The userspace driver and kernel modules must match versions **exactly**. If you install the optional CUDA Toolkit, use the toolkit version called out in the LLM runtime section for this frozen configuration and do not let it replace the driver.
 
 | Component | Version | Notes |
 |---|---|---|
@@ -38,7 +38,7 @@ Write Raspberry Pi OS (64-bit, Trixie) with Raspberry Pi Imager. Enable SSH in t
 
 ```bash
 sudo apt update
-sudo apt install -y build-essential git linux-headers-rpi-v8
+sudo apt install -y build-essential git linux-headers-rpi-v8 pciutils wget curl ca-certificates
 ```
 
 `linux-headers-rpi-v8` provides headers for the 4K-page kernel that the NVIDIA driver requires.
@@ -137,7 +137,7 @@ sudo reboot
 ## 5. Verify the driver
 
 ```bash
-lsmod | grep nvidia                       # nvidia, nvidia_uvm, nvidia_modeset loaded
+lsmod | grep nvidia                       # nvidia and nvidia_uvm should be loaded
 sudo dmesg | grep -iE 'nvrm|nvidia' | tail -20
 nvidia-smi
 ```
@@ -151,6 +151,7 @@ Success looks like:
 dmesg notes:
 
 - `NVRM: loading NVIDIA UNIX Open Kernel Module ... 580.95.05` → good
+- `nvidia_modeset` may stay unloaded on a headless CUDA-only node; `nvidia` and `nvidia_uvm` are the important modules for ollama
 - `NVRM: Chipset not recognized (vendor ID 0x14e4, device ID 0x2712)` and "has not been qualified on this platform" → **harmless**, refers to the Broadcom host bridge
 - `Cannot initialize GSP firmware RM` → bad: you are on the 16K kernel, or an unpatched module got loaded (see troubleshooting)
 
@@ -181,7 +182,7 @@ Operational notes:
 
 - **The first response after a cold start is slow** (couple of minutes for an 8B model): the model crosses the PCIe x1 link once, and CUDA graphs get compiled. Subsequent loads take seconds and inference runs at full speed. Always measure performance on the second run or later
 - Keep models inside VRAM. CPU-offloaded layers cross the x1 link every token and destroy throughput. On 8GB VRAM, 8B-class Q4 models are the sweet spot
-- CUDA Toolkit is **not** required for ollama. Install it (13.0.2, `linux_sbsa` runfile, **uncheck "Driver"** in the component selection) only if you want to build llama.cpp with CUDA yourself
+- CUDA Toolkit is **not** required for ollama. Install it only if you want to build llama.cpp with CUDA yourself. For this frozen driver stack, use CUDA Toolkit 13.0.2 (`linux_sbsa` runfile) and **uncheck "Driver"** in the component selection
 
 Measured reference (RTX 4060, qwen3:8b Q4, warm): **43 tok/s generation, ~615 tok/s prompt eval**.
 
@@ -202,7 +203,7 @@ Measured reference (RTX 4060, qwen3:8b Q4, warm): **43 tok/s generation, ~615 to
 |---|---|---|
 | `fatal error: stdarg.h: No such file or directory` ×many during build | `SYSSRC` was passed, breaking conftest header detection on Pi OS split headers | Rebuild without `SYSSRC` (use `KERNEL_UNAME=` only if cross-building); clean `kernel-open/conftest` first |
 | `Cannot initialize GSP firmware RM` in dmesg | 16K kernel still active, or unpatched module loaded | `getconf PAGE_SIZE` must be 4096; `modinfo nvidia \| grep filename` to check which module is resolved |
-| `nvidia-smi` → `No devices were found` | userspace/module version mismatch | Compare `cat /proc/driver/nvidia/version` with `nvidia-smi` version |
+| `nvidia-smi` → `No devices were found` | Driver loaded but the GPU did not initialize; possible PCIe, GSP, device node, or userspace/module mismatch | Check `lspci`, `dmesg`, `cat /proc/driver/nvidia/version`, `modinfo nvidia \| grep filename`, and `/dev/nvidia*` in that order |
 | Module build fails on headers | Headers don't match target kernel | `uname -r` vs `/lib/modules/`; reinstall `linux-headers-rpi-v8` |
 | GPU disappears / PCIe errors under load | Gen 3 link instability | Set `dtparam=pciex1_gen=2` |
 | `lspci` shows nothing | Hardware: cabling, GPU power, power-on order | See section 0 and [troubleshooting.md](troubleshooting.md) |
