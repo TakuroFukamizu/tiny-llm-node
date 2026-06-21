@@ -115,7 +115,7 @@ Build time on a Pi 5 is roughly 30–60 minutes. The `Warning: modules_install: 
 
 > ⚠️ **Do NOT pass `SYSSRC=/lib/modules/$(uname -r)/build` to make.** Because of the split header packages on Raspberry Pi OS, pointing `SYSSRC` at the arch-specific directory hides the shared headers from the build's feature-detection step (conftest). Every header probe then fails and the build dies with hundreds of `fatal error: stdarg.h: No such file or directory`. With no `SYSSRC` at all, the Makefile resolves the `/lib/modules/<ver>/source` (shared) and `build` (arch) symlinks correctly on its own.
 >
-> If you ever need to build for a kernel other than the running one, pass **only** `KERNEL_UNAME=<target version>` (e.g. `KERNEL_UNAME=6.12.75+rpt-rpi-v8`). This is also how you can pre-build the modules while still running the 16K kernel, collapsing the procedure to a single reboot.
+> If you ever need to build for a kernel other than the running one, pass **only** `KERNEL_UNAME=<target version>` (e.g. `KERNEL_UNAME=6.12.75+rpt-rpi-v8`). This is also how you can pre-build the modules while still running the 16K kernel, collapsing the procedure to a single reboot. In that case run `sudo depmod -a <target version>` too — a bare `depmod -a` only regenerates dependencies for the running kernel, not the one you built for.
 >
 > If a build failed half-way and you are retrying, clean the stale feature-detection state first:
 > ```bash
@@ -191,7 +191,7 @@ Measured reference (RTX 4060, qwen3:8b Q4, warm): **43 tok/s generation, ~615 to
 ## 7. Maintenance rules
 
 1. The driver stack is frozen at 580.95.05. Do not update userspace, modules, or CUDA independently — they break unless versions match exactly
-2. Kernel packages are held. After any intentional kernel update, rebuild and reinstall the modules (section 4)
+2. Kernel packages are held. After any intentional kernel update, rebuild and reinstall the modules (section 4). Holding also pauses kernel security updates, so plan a deliberate kernel update + module rebuild periodically rather than running indefinitely on an unpatched kernel
 3. Power sequencing: GPU power first on startup, last off on shutdown
 4. This is a community-patched, unofficial configuration — treat it as a lab/dev node, not production
 
