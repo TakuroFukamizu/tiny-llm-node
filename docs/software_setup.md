@@ -88,9 +88,12 @@ If `lspci` shows nothing, stop and fix hardware first: cable seating/orientation
 ```bash
 mkdir -p ~/nvidia && cd ~/nvidia
 wget https://us.download.nvidia.com/XFree86/aarch64/580.95.05/NVIDIA-Linux-aarch64-580.95.05.run
-sh ./NVIDIA-Linux-aarch64-580.95.05.run --check   # verify integrity
+sha256sum NVIDIA-Linux-aarch64-580.95.05.run   # compare with NVIDIA's published checksum
+sh ./NVIDIA-Linux-aarch64-580.95.05.run --check   # verify internal integrity
 sudo sh ./NVIDIA-Linux-aarch64-580.95.05.run --no-kernel-modules --silent
 ```
+
+`--check` only validates the runfile's internal archive; compare the `sha256sum` against the value published on the [NVIDIA Unix Driver Archive](https://www.nvidia.com/en-us/drivers/unix/) page to confirm the download itself is genuine.
 
 `--no-kernel-modules` is the core of this whole procedure: install only the userspace (libcuda, nvidia-smi, nvidia-modprobe, …) and build the patched kernel modules separately in the next step.
 
@@ -160,7 +163,10 @@ dmesg notes:
 ## 6. LLM runtime (ollama)
 
 ```bash
-curl -fsSL https://ollama.com/install.sh | sh
+# Download first so you can inspect what runs as root, then execute
+curl -fsSL https://ollama.com/install.sh -o ollama-install.sh
+less ollama-install.sh    # optional: review before running
+sh ollama-install.sh
 ```
 
 The install log must end with `NVIDIA GPU installed.` (If it says CPU-only, the driver isn't visible to ollama.)

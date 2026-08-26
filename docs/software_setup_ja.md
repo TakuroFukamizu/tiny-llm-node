@@ -88,9 +88,12 @@ lspci -nn | grep -i nvidia
 ```bash
 mkdir -p ~/nvidia && cd ~/nvidia
 wget https://us.download.nvidia.com/XFree86/aarch64/580.95.05/NVIDIA-Linux-aarch64-580.95.05.run
-sh ./NVIDIA-Linux-aarch64-580.95.05.run --check   # 整合性確認
+sha256sum NVIDIA-Linux-aarch64-580.95.05.run   # NVIDIA 公開のチェックサムと照合
+sh ./NVIDIA-Linux-aarch64-580.95.05.run --check   # 内部整合性の確認
 sudo sh ./NVIDIA-Linux-aarch64-580.95.05.run --no-kernel-modules --silent
 ```
+
+`--check` は runfile 内部アーカイブの検証のみです。ダウンロード自体が正規のものか確認するため、`sha256sum` の値を [NVIDIA Unix Driver Archive](https://www.nvidia.com/en-us/drivers/unix/) ページ掲載のチェックサムと照合してください。
 
 `--no-kernel-modules` が本手順全体の核心です: ユーザースペース(libcuda, nvidia-smi, nvidia-modprobe …)のみをインストールし、パッチ済みカーネルモジュールは次のステップで別途ビルドします。
 
@@ -160,7 +163,10 @@ dmesg の見方:
 ## 6. LLM ランタイム(ollama)
 
 ```bash
-curl -fsSL https://ollama.com/install.sh | sh
+# root で走る内容を確認できるよう、いったん保存してから実行
+curl -fsSL https://ollama.com/install.sh -o ollama-install.sh
+less ollama-install.sh    # 任意: 実行前に内容を確認
+sh ollama-install.sh
 ```
 
 インストールログの最後に `NVIDIA GPU installed.` が出ること。(CPU-only と出たらドライバが ollama から見えていません。)
