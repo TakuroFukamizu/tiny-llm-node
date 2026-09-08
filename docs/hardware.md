@@ -45,6 +45,7 @@ May upgrade to:
 ## Geekworm X1010 PCIe board
 
 https://wiki.geekworm.com/X1010
+https://suptronics.com/Raspberrypi/Interface/x1010-v1.1.html
 
 ![X1010](https://wiki.geekworm.com/images/6/6e/X1010.jpg)
 
