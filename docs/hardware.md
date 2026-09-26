@@ -181,3 +181,41 @@ recommended for stability.
 ## airflow
 
 ensure GPU cooling clearance.
+
+---
+
+# WiFi provisioning (optional)
+
+## M5Stack Unit QRCode (STM32F030)
+
+Desk spec, not yet verified on hardware (2026-09-26).
+
+https://www.switch-science.com/products/9508
+https://github.com/m5stack/M5Unit-QRCode
+
+Role:
+
+- reads WiFi share QR codes from a smartphone
+- lets the headless node join a WiFi network without keyboard or display
+- driven by the `wifi-qr` daemon (see [services/wifi-qr/README.md](../services/wifi-qr/README.md))
+
+Interface:
+
+I2C, address 0x21
+
+3.3V logic (I2C pull-ups to 3V3), 5V power over Grove
+
+set the unit's slide switch to I2C (not UART)
+
+Wiring (Grove → Pi 40-pin header):
+
+| Grove wire | Signal | Pi header | GPIO |
+|---|---|---|---|
+| red | 5V | pin 2 | — |
+| black | GND | pin 6 | — |
+| yellow | SDA | pin 3 | GPIO2 |
+| white | SCL | pin 5 | GPIO3 |
+
+Wire colors follow the M5Stack Grove convention; go by the Grove connector pin position if your cable differs.
+
+Requires a Grove to female jumper cable. Connects directly to the Pi GPIO, no level shifter needed.

@@ -8,7 +8,8 @@
 4. connect DC-DC converter
 5. connect PD trigger
 6. verify output voltage is 12V
-7. power on system
+7. connect QR scanner to GPIO header (optional, see [services/wifi-qr](../services/wifi-qr/README.md))
+8. power on system
 
 ---
 
@@ -17,3 +18,5 @@
 verify polarity
 
 verify voltage before connecting GPU
+
+set the QR scanner switch to I2C before powering on

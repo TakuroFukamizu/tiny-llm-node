@@ -73,6 +73,7 @@ graph TD
 - 組み立てガイド
 - ソフトウェア設定
 - ベンチマーク
+- QR コードによる WiFi 設定（services/wifi-qr）
 
 ---
 
@@ -92,6 +93,7 @@ power.md
 bill_of_materials.md
 assembly.md
 software_setup.md
+services/wifi-qr/    # QR コードによるヘッドレス WiFi 設定（任意）
 ```
 
 ---
