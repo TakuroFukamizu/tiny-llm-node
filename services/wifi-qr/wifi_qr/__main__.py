@@ -4,10 +4,13 @@ Without flags the process runs as the provisioning daemon (this is what the
 systemd unit starts). Flags:
 
 ``--probe``
-    Read the firmware version and trigger mode from the unit and print three
-    lines (``i2c: bus=1 addr=0x21 ok`` / ``firmware version: 0x..`` /
-    ``trigger mode: auto``), exit 0; exit 2 with an ``i2c: ... error`` line
-    and a wiring hint if the I2C bus does not answer.
+    Read the trigger mode (the liveness check) and the firmware version from
+    the unit and print three lines (``i2c: bus=1 addr=0x21 ok`` /
+    ``firmware version: 0x..`` / ``trigger mode: auto``), exit 0; exit 2
+    with an ``i2c: ... error`` line and a wiring hint if the I2C bus does
+    not answer. The firmware-version register address is unverified (spec
+    section 2), so a failure there alone prints
+    ``firmware version: unreadable (...)`` and still exits 0.
 ``--dry-run``
     Parse and log credentials (password masked) without calling nmcli.
 ``--once``
@@ -25,7 +28,6 @@ Variable                    Default  Meaning
 ``WIFI_QR_I2C_ADDR``        0x21     unit address, hex or decimal
 ``WIFI_QR_IFACE``           wlan0    interface the NetworkManager profile binds
 ``WIFI_QR_POLL_INTERVAL``   0.2      seconds between READY polls
-``WIFI_QR_READ_CHUNK``      32       DATA bytes per I2C transaction
 ``WIFI_QR_FAKE_SCANNER``    (unset)  if set, a ``FakeScanner`` serving this one
                                      payload replaces the I2C driver (tests,
                                      runbook step without hardware)
@@ -48,7 +50,14 @@ from typing import Mapping, Sequence
 
 from wifi_qr.daemon import Daemon, NullFeedback
 from wifi_qr.network import DryRunBackend, NetworkBackend, NetworkManagerBackend
-from wifi_qr.scanner import TRIGGER_MODE_AUTO, TRIGGER_MODE_MANUAL, FakeScanner, Scanner, UnitQRCode
+from wifi_qr.scanner import (
+    TRIGGER_MODE_AUTO,
+    TRIGGER_MODE_MANUAL,
+    FakeScanner,
+    Scanner,
+    ScannerError,
+    UnitQRCode,
+)
 
 LOG_FORMAT = "%(levelname)s %(name)s: %(message)s"
 
@@ -60,7 +69,10 @@ _PROBE_HELP = (
     "Could not talk to the QR scanner over I2C.\n"
     "Check: (1) `i2cdetect -y {bus}` shows the unit at 0x{addr:02x};\n"
     "       (2) the wiring: red->pin 2 (5V), black->pin 6 (GND), "
-    "yellow SDA->pin 3 (GPIO2), white SCL->pin 5 (GPIO3);\n"
+    "SDA->pin 3 (GPIO2), SCL->pin 5 (GPIO3); SDA is the signal wire next to "
+    "red, SCL the outermost\n"
+    "           (M5Stack cables: yellow=SDA/white=SCL; Seeed cables are the "
+    "reverse -- try swapping the two);\n"
     "       (3) the slide switch on the unit is in the I2C position;\n"
     "       (4) I2C is enabled (dtparam=i2c_arm=on, reboot after enabling)."
 )
@@ -78,7 +90,6 @@ class Config:
     i2c_addr: int = 0x21
     iface: str = "wlan0"
     poll_interval: float = 0.2
-    read_chunk: int = 32
     fake_payload: str | None = None
 
 
@@ -101,7 +112,6 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
         i2c_addr=int(_number(env, "WIFI_QR_I2C_ADDR", 0x21, lambda v: int(v, 0))),
         iface=env.get("WIFI_QR_IFACE", "").strip() or "wlan0",
         poll_interval=float(_number(env, "WIFI_QR_POLL_INTERVAL", 0.2, float)),
-        read_chunk=int(_number(env, "WIFI_QR_READ_CHUNK", 32, lambda v: int(v, 0))),
         fake_payload=fake or None,
     )
 
@@ -113,7 +123,7 @@ def build_scanner(cfg: Config) -> Scanner:
     """
     if cfg.fake_payload is not None:
         return FakeScanner([cfg.fake_payload.encode("utf-8")])
-    return UnitQRCode(bus=cfg.i2c_bus, addr=cfg.i2c_addr, chunk=cfg.read_chunk)
+    return UnitQRCode(bus=cfg.i2c_bus, addr=cfg.i2c_addr)
 
 
 def build_backend(cfg: Config, dry_run: bool = False) -> NetworkBackend:
@@ -129,18 +139,25 @@ def probe(scanner: Scanner, cfg: Config | None = None) -> int:
     Output (stdout, three lines, matched by RUNBOOK.md step 5)::
 
         i2c: bus=1 addr=0x21 ok
-        firmware version: 0x05
+        firmware version: 0x05          (or "unreadable (<error>)")
         trigger mode: auto
+
+    The trigger-mode read decides whether the bus answers; the firmware
+    version is diagnostic only (its register address is unverified) and can
+    never turn the probe into a failure.
     """
     cfg = cfg or Config()
     try:
-        version = scanner.firmware_version()
         get_mode = getattr(scanner, "get_trigger_mode", None)
         mode = get_mode() if callable(get_mode) else TRIGGER_MODE_AUTO
     except OSError as exc:
         return _probe_failed(exc, cfg)
+    try:
+        firmware = f"0x{scanner.firmware_version():02x}"
+    except (OSError, ScannerError) as exc:
+        firmware = f"unreadable ({exc})"
     print(f"i2c: bus={cfg.i2c_bus} addr=0x{cfg.i2c_addr:02x} ok")
-    print(f"firmware version: 0x{version:02x}")
+    print(f"firmware version: {firmware}")
     print(f"trigger mode: {_trigger_mode_name(mode)}")
     return EXIT_OK
 

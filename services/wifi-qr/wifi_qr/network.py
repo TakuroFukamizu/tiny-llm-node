@@ -193,6 +193,15 @@ class NetworkManagerBackend:
             logger.error("%s", reason)
             self._delete_profile_quietly(name)
             return ConnectResult(ok=False, reason=reason)
+        except ValueError:
+            # subprocess refuses argv with an embedded NUL ("embedded null
+            # byte"). The parser rejects such credentials first; this guard
+            # only makes sure a stray one can never take the loop down. No
+            # cleanup: the failing argv is the first nmcli call for this
+            # profile (show), and a delete would raise the same error.
+            reason = "invalid characters in credential"
+            logger.error("%s (profile not created)", reason)
+            return ConnectResult(ok=False, reason=reason)
 
         addresses = self.ip_addresses()
         logger.info("connected to %s (%s)", cred.ssid, ", ".join(addresses) or "no IPv4 yet")
@@ -293,7 +302,7 @@ class NetworkManagerBackend:
         """Best-effort cleanup after a failed add/up; never raises."""
         try:
             self._delete_profile(name)
-        except (subprocess.TimeoutExpired, OSError) as exc:
+        except (subprocess.TimeoutExpired, OSError, ValueError) as exc:
             logger.debug("cleanup of %s failed (%s)", name, type(exc).__name__)
 
 

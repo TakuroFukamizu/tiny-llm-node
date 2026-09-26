@@ -312,6 +312,31 @@ def test_oserror_message_is_masked(backend: NetworkManagerBackend, runner: FakeR
     assert "***" in result.reason
 
 
+def test_value_error_from_runner_is_reported_not_raised(
+    backend: NetworkManagerBackend, runner: FakeRunner, caplog: pytest.LogCaptureFixture
+) -> None:
+    # subprocess raises ValueError("embedded null byte") for a NUL in argv.
+    # The parser rejects such values first; this is the belt-and-braces path
+    # so that no payload can ever take the daemon loop down.
+    runner.raise_on("show", ValueError("embedded null byte"))
+    with caplog.at_level(logging.DEBUG):
+        result = backend.apply(_cred(ssid="Ca\x00fe"))
+    assert result == ConnectResult(ok=False, reason="invalid characters in credential")
+    # nothing was added, so nothing is deleted (a delete with the same argv
+    # would raise the same ValueError again)
+    assert runner.kinds() == ["show"]
+    _assert_no_password(caplog)
+
+
+def test_value_error_from_cleanup_delete_is_ignored(
+    backend: NetworkManagerBackend, runner: FakeRunner
+) -> None:
+    runner.respond("up", rc=4, stderr="boom")
+    runner.raise_on("delete", ValueError("embedded null byte"))
+    result = backend.apply(_cred())
+    assert result == ConnectResult(ok=False, reason="boom")
+
+
 # --------------------------------------------------------------------------- #
 # apply(): success
 # --------------------------------------------------------------------------- #

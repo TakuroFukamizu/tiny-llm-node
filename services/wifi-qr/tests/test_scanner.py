@@ -2,8 +2,8 @@
 
 The I2C bus is replaced by ``FakeBus``, which records every message that
 passes through ``i2c_rdwr`` and serves reads from a sparse byte map, so the
-register encoding and chunked read behaviour can be asserted without
-hardware or smbus2.
+register encoding and the single-transaction payload read can be asserted
+without hardware or smbus2.
 """
 
 from __future__ import annotations
@@ -173,41 +173,46 @@ def test_custom_address_is_used_for_every_message() -> None:
 # --- read_payload ------------------------------------------------------------
 
 
-def test_read_payload_reads_length_then_chunks_with_advancing_register() -> None:
+def test_read_payload_reads_length_then_whole_payload_at_0x1000() -> None:
+    # The vendor firmware serves the decode buffer from offset 0 for ANY
+    # address in the DATA window and resets its TX index on every register
+    # write, so the payload must be fetched in ONE transaction at 0x1000
+    # (as both vendor drivers do). Offset-advanced chunking would return the
+    # first bytes again for every chunk.
     data = bytes(range(70))
-    dev, bus = make({REG_LENGTH: (70).to_bytes(2, "little"), REG_DATA: data}, chunk=32)
+    dev, bus = make({REG_LENGTH: (70).to_bytes(2, "little"), REG_DATA: data})
 
     assert dev.read_payload() == data
 
     assert bus.transactions == [
         [(ADDR, "w", b"\x20\x00"), (ADDR, "r", b"\x46\x00")],
-        [(ADDR, "w", b"\x00\x10"), (ADDR, "r", data[0:32])],
-        [(ADDR, "w", b"\x20\x10"), (ADDR, "r", data[32:64])],
-        [(ADDR, "w", b"\x40\x10"), (ADDR, "r", data[64:70])],
+        [(ADDR, "w", b"\x00\x10"), (ADDR, "r", data)],
         [(ADDR, "w", b"\x10\x00\x00")],
     ]
 
 
-def test_read_payload_exact_chunk_multiple_has_no_empty_read() -> None:
-    data = bytes(range(64))
-    dev, bus = make({REG_LENGTH: b"\x40\x00", REG_DATA: data}, chunk=32)
+def test_read_payload_never_advances_the_data_register() -> None:
+    data = bytes(range(200))
+    dev, bus = make({REG_LENGTH: (200).to_bytes(2, "little"), REG_DATA: data})
     assert dev.read_payload() == data
-    reads = [m for m in bus.messages if m[1] == "r"]
-    assert [len(m[2]) for m in reads] == [2, 32, 32]
+    data_writes = [m for m in bus.messages if m[1] == "w" and m[2][1] == 0x10]
+    assert data_writes == [(ADDR, "w", b"\x00\x10")]
 
 
 def test_read_payload_length_is_little_endian() -> None:
     data = bytes(300)
-    dev, bus = make({REG_LENGTH: b"\x2c\x01", REG_DATA: data}, chunk=100)
+    dev, bus = make({REG_LENGTH: b"\x2c\x01", REG_DATA: data})
     assert len(dev.read_payload()) == 300
     reads = [m for m in bus.messages if m[1] == "r"]
-    assert [len(m[2]) for m in reads] == [2, 100, 100, 100]
+    assert [len(m[2]) for m in reads] == [2, 300]
 
 
-def test_read_payload_max_length_512_is_accepted() -> None:
+def test_read_payload_max_length_512_is_accepted_in_one_read() -> None:
     data = bytes(i & 0xFF for i in range(DATA_MAX))
-    dev, _ = make({REG_LENGTH: b"\x00\x02", REG_DATA: data}, chunk=32)
+    dev, bus = make({REG_LENGTH: b"\x00\x02", REG_DATA: data})
     assert dev.read_payload() == data
+    reads = [m for m in bus.messages if m[1] == "r"]
+    assert [len(m[2]) for m in reads] == [2, DATA_MAX]
 
 
 @pytest.mark.parametrize("length", [b"\x00\x00", b"\x01\x02", b"\xff\xff"])
@@ -226,12 +231,6 @@ def test_oserror_from_bus_propagates_unchanged() -> None:
     assert exc.value.errno == 121
     with pytest.raises(OSError):
         dev.read_payload()
-
-
-@pytest.mark.parametrize("chunk", [0, -1])
-def test_invalid_chunk_rejected(chunk: int) -> None:
-    with pytest.raises(ValueError):
-        UnitQRCode(bus=FakeBus(), msg_factory=FakeMsg, chunk=chunk)
 
 
 # --- smbus2 laziness ----------------------------------------------------------

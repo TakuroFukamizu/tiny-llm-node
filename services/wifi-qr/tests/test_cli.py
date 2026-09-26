@@ -35,7 +35,6 @@ def test_defaults_when_env_empty():
     assert cfg.i2c_addr == 0x21
     assert cfg.iface == "wlan0"
     assert cfg.poll_interval == pytest.approx(0.2)
-    assert cfg.read_chunk == 32
     assert cfg.fake_payload is None
 
 
@@ -51,14 +50,12 @@ def test_env_overrides():
             "WIFI_QR_I2C_BUS": "3",
             "WIFI_QR_IFACE": "wlan1",
             "WIFI_QR_POLL_INTERVAL": "0.5",
-            "WIFI_QR_READ_CHUNK": "16",
             "WIFI_QR_FAKE_SCANNER": PAYLOAD,
         }
     )
     assert cfg.i2c_bus == 3
     assert cfg.iface == "wlan1"
     assert cfg.poll_interval == pytest.approx(0.5)
-    assert cfg.read_chunk == 16
     assert cfg.fake_payload == PAYLOAD
 
 
@@ -66,7 +63,7 @@ def test_empty_fake_scanner_is_unset():
     assert cli.load_config({"WIFI_QR_FAKE_SCANNER": ""}).fake_payload is None
 
 
-@pytest.mark.parametrize("key", ["WIFI_QR_I2C_BUS", "WIFI_QR_I2C_ADDR", "WIFI_QR_POLL_INTERVAL", "WIFI_QR_READ_CHUNK"])
+@pytest.mark.parametrize("key", ["WIFI_QR_I2C_BUS", "WIFI_QR_I2C_ADDR", "WIFI_QR_POLL_INTERVAL"])
 def test_invalid_numeric_env_raises_config_error(key):
     with pytest.raises(cli.ConfigError) as info:
         cli.load_config({key: "banana"})
@@ -95,14 +92,14 @@ def test_build_scanner_real_uses_config(monkeypatch):
     calls = {}
 
     class StubUnit:
-        def __init__(self, bus, addr, chunk):
-            calls.update(bus=bus, addr=addr, chunk=chunk)
+        def __init__(self, bus, addr):
+            calls.update(bus=bus, addr=addr)
 
     monkeypatch.setattr(cli, "UnitQRCode", StubUnit)
-    cfg = cli.load_config({"WIFI_QR_I2C_BUS": "2", "WIFI_QR_I2C_ADDR": "0x22", "WIFI_QR_READ_CHUNK": "8"})
+    cfg = cli.load_config({"WIFI_QR_I2C_BUS": "2", "WIFI_QR_I2C_ADDR": "0x22"})
     scanner = cli.build_scanner(cfg)
     assert isinstance(scanner, StubUnit)
-    assert calls == {"bus": 2, "addr": 0x22, "chunk": 8}
+    assert calls == {"bus": 2, "addr": 0x22}
 
 
 def test_build_backend_dry_run_and_real():
@@ -205,15 +202,41 @@ def test_probe_does_not_write_to_scanner(capsys):
 
 def test_probe_oserror_prints_help_and_exits_2(capsys):
     class DeadScanner(FakeScanner):
+        # The trigger-mode read is the liveness check; the unit answers nothing.
+        def get_trigger_mode(self) -> int:
+            raise OSError(121, "Remote I/O error")
+
         def firmware_version(self) -> int:
             raise OSError(121, "Remote I/O error")
 
     rc = cli.probe(DeadScanner())
     assert rc == 2
-    err = capsys.readouterr().err
+    out, err = capsys.readouterr()
+    assert out == ""
     assert "i2c: bus=1 addr=0x21 error: [Errno 121] Remote I/O error" in err
     for hint in ("i2cdetect", "wiring", "switch"):
         assert hint in err
+
+
+def test_probe_unreadable_firmware_version_is_not_an_error(capsys):
+    # Spec section 2: the FW-version register (0x00FE vs 0x00F0) is diagnostic
+    # only. A NACK there must not send the runbook down the wiring branch.
+    class NoFwScanner(FakeScanner):
+        def get_trigger_mode(self) -> int:
+            return 0
+
+        def firmware_version(self) -> int:
+            raise OSError(121, "Remote I/O error")
+
+    rc = cli.probe(NoFwScanner())
+    assert rc == 0
+    out, err = capsys.readouterr()
+    assert err == ""
+    assert out == (
+        "i2c: bus=1 addr=0x21 ok\n"
+        "firmware version: unreadable ([Errno 121] Remote I/O error)\n"
+        "trigger mode: auto\n"
+    )
 
 
 def test_probe_oserror_from_build_scanner_exits_2(monkeypatch, capsys):

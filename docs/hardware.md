@@ -216,6 +216,6 @@ Wiring (Grove → Pi 40-pin header):
 | yellow | SDA | pin 3 | GPIO2 |
 | white | SCL | pin 5 | GPIO3 |
 
-Wire colors follow the M5Stack Grove convention; go by the Grove connector pin position if your cable differs.
+Wire colors follow the M5Stack Grove convention; Seeed-brand Grove cables are the reverse (yellow = SCL, white = SDA). Go by position, not color: on every Grove connector the four wires sit in the fixed order SCL, SDA, VCC, GND, so the signal wire next to red is SDA (pin 3) and the outermost signal wire, farthest from red, is SCL (pin 5). Swapping the two is electrically harmless (both lines are pulled up to 3V3); `i2cdetect` just shows nothing until they are the right way round.
 
 Requires a Grove to female jumper cable. Connects directly to the Pi GPIO, no level shifter needed.

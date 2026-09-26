@@ -2,8 +2,8 @@
 
 The scanner is ``FakeScanner`` (or small subclasses that raise ``OSError``)
 and the backend is ``FakeBackend``; every state transition, the dedupe
-rule, READY==2 handling, the I2C error budget and the feedback events are
-asserted without hardware or nmcli.
+rule, READY==2 handling (read like READY==1), the I2C error budget and the
+feedback events are asserted without hardware or nmcli.
 """
 
 from __future__ import annotations
@@ -170,6 +170,24 @@ def test_start_exhausts_retries_and_raises():
     assert FeedbackEvent.SCANNER_ERROR in fb.events
 
 
+def test_start_survives_unreadable_firmware_version(caplog):
+    # Spec section 2: the FW-version register address is unverified and is
+    # diagnostic only; a NACK there must not fail start-up.
+    class NoFwScanner(FakeScanner):
+        def firmware_version(self) -> int:
+            raise OSError(121, "Remote I/O error")
+
+    scanner = NoFwScanner()
+    daemon, _, fb, sleep = make(scanner, startup_retries=2, startup_retry_delay=5.0)
+    with caplog.at_level(logging.INFO, logger="wifi_qr.daemon"):
+        daemon.start()
+    assert scanner.trigger_mode_calls == [True]
+    assert sleep.calls == []
+    assert fb.events == [FeedbackEvent.SCANNER_READY]
+    assert "scanner ready: firmware=unknown trigger_mode=auto" in caplog.text
+    assert "firmware version unreadable" in caplog.text
+
+
 def test_run_returns_1_when_start_fails():
     scanner = FlakyStartScanner(failures=100)
     daemon, _, _, _ = make(scanner, startup_retries=1, startup_retry_delay=0.0)
@@ -328,32 +346,37 @@ def test_ready_zero_returns_false_without_reading():
     assert fb.events == [FeedbackEvent.SCANNER_READY]
 
 
-def test_ready_two_three_times_clears_and_drops():
-    scanner = FakeScanner([PAYLOAD], ready_sequence=[2, 2, 2, 1])
+def test_ready_two_is_read_like_one():
+    # Firmware: READY saturates at 2 when a second decode arrived before the
+    # host read the first; the buffer holds the latest decode and the value is
+    # sticky until DATA is read. It must be read, not re-polled or discarded.
+    scanner = FakeScanner([PAYLOAD], ready_sequence=[2, 0])
     daemon, backend, _, _ = make(scanner)
     daemon.start()
-    assert daemon.step() is False
+    assert daemon.step() is True
+    assert backend.applied == [CRED]
+    # only one READY read per step: the trailing 0 is still queued
+    assert scanner.ready_sequence == [0]
+    # cleared once by _apply, never by a READY==2 "give up" path
     assert scanner.cleared == 1
-    assert backend.applied == []
-    assert scanner.payloads == [PAYLOAD]
-    # the trailing 1 was not consumed by the READY==2 loop
-    assert scanner.ready_sequence == [1]
+
+
+def test_ready_two_repeatedly_never_discards():
+    scanner = FakeScanner([PAYLOAD, PAYLOAD], ready_sequence=[2, 2])
+    daemon, backend, _, _ = make(scanner)
+    daemon.start()
+    assert daemon.step() is True
+    assert daemon.step() is True
+    assert backend.applied == [CRED, CRED]
 
 
 def test_ready_two_then_one_reads():
-    scanner = FakeScanner([PAYLOAD], ready_sequence=[2, 1])
+    scanner = FakeScanner([PAYLOAD, PAYLOAD], ready_sequence=[2, 1])
     daemon, backend, _, _ = make(scanner)
     daemon.start()
     assert daemon.step() is True
-    assert backend.applied == [CRED]
-
-
-def test_ready_two_two_one_reads():
-    scanner = FakeScanner([PAYLOAD], ready_sequence=[2, 2, 1])
-    daemon, backend, _, _ = make(scanner)
-    daemon.start()
     assert daemon.step() is True
-    assert backend.applied == [CRED]
+    assert backend.applied == [CRED, CRED]
 
 
 # --------------------------------------------------------------------------- #
@@ -387,6 +410,20 @@ def test_bad_payload_emits_failed_and_never_logs_secret(raw, caplog):
     assert "alice" not in caplog.text
     assert "example.com" not in caplog.text
     assert any(r.levelno == logging.WARNING for r in caplog.records)
+
+
+def test_nul_inside_value_is_rejected_not_fatal(caplog):
+    # A NUL inside S:/P: used to reach subprocess argv and raise ValueError
+    # out of run(); it must land on the ordinary FAILED path instead.
+    scanner = FakeScanner([b"WIFI:T:WPA;S:Ca\x00fe;P:hunter2secret;;"])
+    daemon, backend, fb, _ = make(scanner)
+    with caplog.at_level(logging.WARNING, logger="wifi_qr.daemon"):
+        daemon.start()
+        assert daemon.step() is True
+    assert backend.applied == []
+    assert fb.events[-1] == FeedbackEvent.FAILED
+    assert "PayloadError" in caplog.text
+    assert "hunter2" not in caplog.text
 
 
 def test_bad_payload_log_mentions_error_type(caplog):
@@ -454,15 +491,14 @@ def test_oserror_emits_scanner_error_and_sleeps_one_second(caplog):
     assert backend.applied == [CRED]
 
 
-def test_verbose_logs_ready_value_for_stuck_ready_2(caplog):
-    # RUNBOOK troubleshooting: "--verbose shows ready=2 repeatedly".
-    scanner = FakeScanner(ready_sequence=[2, 2, 2])
+def test_verbose_logs_ready_2(caplog):
+    # RUNBOOK: "--verbose shows ready=2" is normal (two decodes between polls).
+    scanner = FakeScanner([PAYLOAD], ready_sequence=[2])
     daemon, _, _, _ = make(scanner)
     with caplog.at_level(logging.DEBUG, logger="wifi_qr.daemon"):
         daemon.start()
-        assert daemon.step() is False
+        assert daemon.step() is True
     assert "ready=2" in caplog.text
-    assert scanner.cleared == 1
 
 
 def test_verbose_logs_ready_0_on_first_poll(caplog):
@@ -488,6 +524,60 @@ def test_oserror_count_resets_on_success():
     daemon.step()  # error 2
     assert daemon.step() is False  # READY==0 again
     assert fb.events.count(FeedbackEvent.SCANNER_ERROR) == 4
+
+
+class BrokenDataScanner(FakeScanner):
+    """``ready()`` answers 1 but every ``read_payload()`` raises OSError."""
+
+    def __init__(self, **kw) -> None:
+        super().__init__(**kw)
+        self.read_calls = 0
+
+    def read_payload(self) -> bytes:
+        self.read_calls += 1
+        raise OSError(121, "Remote I/O error")
+
+
+def test_oserror_from_read_payload_counts_toward_budget(caplog):
+    # READY answers but LENGTH/DATA reads fail: the budget must still be spent
+    # (a successful READY read alone is not a successful step).
+    scanner = BrokenDataScanner(ready_sequence=[1] * 5)
+    daemon, _, fb, sleep = make(scanner, max_i2c_errors=3)
+    daemon.start()
+    with caplog.at_level(logging.WARNING, logger="wifi_qr.daemon"):
+        assert daemon.step() is False
+        assert daemon.step() is False
+        with pytest.raises(ScannerError):
+            daemon.step()
+    assert scanner.read_calls == 3
+    assert "scanner error (3/3)" in caplog.text
+    assert fb.events.count(FeedbackEvent.SCANNER_ERROR) == 3
+    assert sleep.calls.count(1.0) == 3
+    # READY is left alone so a transient glitch can retry the same frame.
+    assert scanner.cleared == 0
+
+
+def test_oserror_count_resets_after_successful_read():
+    class OneBadRead(FakeScanner):
+        def __init__(self, **kw) -> None:
+            super().__init__(**kw)
+            self.fail_next = True
+
+        def read_payload(self) -> bytes:
+            if self.fail_next:
+                self.fail_next = False
+                raise OSError(121, "Remote I/O error")
+            return super().read_payload()
+
+    scanner = OneBadRead(payloads=[PAYLOAD], ready_sequence=[1, 1])
+    daemon, backend, _, _ = make(scanner, max_i2c_errors=2)
+    daemon.start()
+    assert daemon.step() is False  # error 1
+    assert daemon.step() is True  # full read succeeds -> budget reset
+    assert backend.applied == [CRED]
+    scanner.fail_next = True
+    scanner.ready_sequence = [1]
+    assert daemon.step() is False  # error 1 again, not 2 -> no ScannerError
 
 
 def test_oserror_reaching_max_raises_scanner_error():

@@ -10,6 +10,13 @@ backslash.  Only ``T`` (security), ``S`` (SSID), ``P`` (password) and ``H``
 (hidden) are used; the WPA-EAP keys ``E`` ``A`` ``I`` ``PH2`` are detected
 and rejected as :class:`UnsupportedAuth`; other keys are ignored.
 
+Control characters (C0, i.e. below 0x20, and DEL) inside the SSID or the
+password are rejected as :class:`PayloadError`: a NUL can never be passed
+to ``nmcli`` (``subprocess`` refuses argv with embedded NULs) and a newline
+would break the line-based profile lookup and the log. WPA passphrases are
+printable ASCII by IEEE 802.11 anyway; leading/trailing whitespace and NUL
+padding around the whole payload are still stripped as before.
+
 This module is pure: it never logs, prints, or includes password material
 in exception messages.
 """
@@ -97,8 +104,12 @@ def parse_wifi_qr(text: str) -> WifiCredential:
     ssid = fields.get("S", "")
     if not ssid:
         raise PayloadError("payload has an empty or missing SSID (S)")
+    if _has_control_chars(ssid):
+        raise PayloadError("SSID (S) contains control characters")
 
     password = _validate_password(security, fields.get("P"))
+    if password is not None and _has_control_chars(password):
+        raise PayloadError("password (P) contains control characters")
     hidden = fields.get("H", "").lower() == "true"
     return WifiCredential(ssid=ssid, password=password, security=security, hidden=hidden)
 
@@ -172,6 +183,11 @@ def _validate_password(security: Security, password: str | None) -> str | None:
         f"{security.name} passphrase must be {_PSK_MIN}-{_PSK_MAX} characters"
         + (f" or a {_PSK_HEX_LEN}-digit hex PSK" if security is Security.WPA else "")
     )
+
+
+def _has_control_chars(value: str) -> bool:
+    """True if ``value`` holds a C0 control character (< 0x20) or DEL (0x7f)."""
+    return any(ord(ch) < 0x20 or ch == "\x7f" for ch in value)
 
 
 def _is_hex_psk(password: str) -> bool:

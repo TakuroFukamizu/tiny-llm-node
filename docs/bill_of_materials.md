@@ -30,4 +30,4 @@ storage (microSD or SSD)
 
 M5Stack Unit QRCode (STM32F030) — optional, WiFi provisioning
 
-Grove to female jumper cable — optional, for the QR scanner
+Grove to female jumper cable — optional, for the QR scanner (any brand; the wiring tables assume M5Stack wire colors, Seeed cables swap yellow/white — see hardware.md)

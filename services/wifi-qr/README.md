@@ -42,6 +42,8 @@ You need one **Grove-to-female-jumper cable** (4 wires). Wire it to the Pi 40-pi
 | Yellow | SDA | pin 3 | GPIO2 |
 | White | SCL | pin 5 | GPIO3 |
 
+**Colours are the M5Stack cable convention; Seeed-brand Grove cables are the reverse (yellow = SCL, white = SDA).** Go by position, not colour: on every Grove connector the four wires sit in the fixed order SCL, SDA, VCC, GND, so the signal wire next to red is SDA (pin 3) and the outermost signal wire, farthest from red, is SCL (pin 5). Swapping the two is electrically harmless (both lines are pulled up to 3V3); `i2cdetect` simply shows nothing until they are the right way round.
+
 Mounting: the field of view is wide (±55°), so the scanner will happily read any QR code that drifts past it. Fix it to the node facing the spot where a user would naturally present a phone (e.g. the front face), not toward a desk or a screen. The unit beeps on every successful decode.
 
 ---
@@ -59,13 +61,13 @@ WIFI:T:WPA;S:Hidden;P:secret123;H:true;;
 
 | Field | Meaning |
 |---|---|
-| `T` | Security: `WPA`, `WPA2`, `WPA3`, `SAE`, `WEP`, `nopass`, or empty (= open). Case-insensitive |
+| `T` | Security: `WPA`, `WPA2`, `WPA3`, `SAE`, `WEP`, `nopass`, or empty (= open). Case-insensitive. `WPA`/`WPA2`/`WPA3` are all applied as `wpa-psk` (`WPA3` = WPA2/WPA3 transition mode); use `SAE` for a WPA3-only AP |
 | `S` | SSID (required) |
 | `P` | Password. Required for WPA/WEP; 8–63 characters for WPA |
 | `H` | `true` for a hidden SSID |
 
 Escaping: inside `S` and `P`, the characters `;` `:` `,` `\` must be written as `\;` `\:` `\,` `\\`.
-`WPA-EAP` (enterprise) and the `E:` `A:` `I:` `PH2:` keys are rejected as unsupported.
+`WPA-EAP` (enterprise) and the `E:` `A:` `I:` `PH2:` keys are rejected as unsupported, and so is any control character (NUL, newline, ...) inside `S` or `P`.
 
 **Android** emits exactly this format from *WiFi settings → Share*. On **iOS**, use a Shortcut or any QR generator. On a Mac or Linux terminal:
 
@@ -79,7 +81,7 @@ qrencode -t ANSIUTF8 'WIFI:T:WPA;S:MyNet;P:pass1234;;'
 ## How it works
 
 1. The daemon polls the scanner's `READY` register over I2C every 200 ms (`WIFI_QR_POLL_INTERVAL`).
-2. When data is ready it reads the payload (length register, then the data register in 32-byte chunks), clears `READY`, and parses the `WIFI:` string.
+2. When data is ready (`READY` = 1, or 2 when two decodes arrived between polls; both are read the same way) it reads the payload (length register, then the whole payload in one read of the data register — the firmware ignores address offsets inside the data window, so chunked reads would corrupt anything longer than one chunk), clears `READY`, and parses the `WIFI:` string.
 3. It applies the credential with `nmcli` as a **persistent NetworkManager profile named `wifi-qr-<ssid>`**. An existing profile with the same name is replaced, so re-scanning after a password change just works.
 4. `nmcli connection up` is waited on for up to 30 s. On success the daemon logs the SSID and the interface addresses; on failure it removes the profile.
 
@@ -97,7 +99,7 @@ python3 -m wifi_qr --once      # exit after applying one credential
 python3 -m wifi_qr --verbose   # DEBUG logging
 ```
 
-Flags can be combined (`--dry-run --once` is the usual test). On an installed device run it as `sudo PYTHONPATH=/opt/wifi-qr python3 -m wifi_qr ...` and stop the service first so the I2C bus is free.
+Flags can be combined (`--dry-run --once` is the usual test). On an installed device run it as `sudo PYTHONPATH=/opt/wifi-qr python3 -m wifi_qr ...` and stop the service first so the I2C bus is free. `--probe` uses the trigger-mode read as the liveness check; the firmware-version register address is unverified, so if only that read fails it prints `firmware version: unreadable (...)` and still exits 0 (the daemon likewise logs `firmware=unknown` and starts normally).
 
 ### Configuration (`/etc/default/wifi-qr`)
 
@@ -109,7 +111,6 @@ The systemd unit reads these environment variables from `/etc/default/wifi-qr`. 
 | `WIFI_QR_I2C_ADDR` | `0x21` | Scanner I2C address |
 | `WIFI_QR_IFACE` | `wlan0` | WiFi interface handed to nmcli |
 | `WIFI_QR_POLL_INTERVAL` | `0.2` | Seconds between `READY` polls |
-| `WIFI_QR_READ_CHUNK` | `32` | Bytes per I2C read of the data register |
 | `WIFI_QR_FAKE_SCANNER` | _(unset)_ | If set to a `WIFI:...` payload, use an in-memory fake scanner instead of I2C (for testing without hardware) |
 
 ---
@@ -123,7 +124,7 @@ cd ~/tiny-llm-node/services/wifi-qr
 sudo ./install.sh
 ```
 
-The installer is idempotent. It installs `python3-smbus2` and `i2c-tools`, enables I2C in `/boot/firmware/config.txt`, copies the package to `/opt/wifi-qr/`, creates `/etc/default/wifi-qr` if missing, and enables + starts `wifi-qr.service`. **If I2C was enabled for the first time it prints that a reboot is required and exits with code 3** — reboot, then continue.
+The installer is idempotent. It installs `python3-smbus2` and `i2c-tools`, enables I2C in `/boot/firmware/config.txt`, copies the package to `/opt/wifi-qr/`, creates `/etc/default/wifi-qr` if missing, and enables + starts `wifi-qr.service`. On a Pi 5 `raspi-config` applies the I2C overlay at runtime, so even a first-time enable normally ends with the service started and exit code 0. **Only if `/dev/i2c-1` still does not exist after enabling I2C does it print `REBOOT REQUIRED:` and exit with code 3** — reboot, then continue.
 
 ```bash
 journalctl -u wifi-qr -f       # watch the log
@@ -153,7 +154,7 @@ nmcli -t -f NAME connection show | grep '^wifi-qr-' | xargs -r -n1 sudo nmcli co
 - Credentials are stored only in NetworkManager keyfiles (`/etc/NetworkManager/system-connections/`, mode 0600).
 - The password is **never written to the log**: `WifiCredential` masks it in `repr()`/`str()` and nmcli failure output is summarised, not echoed. It is passed to `nmcli` as an argument, so it is briefly visible in `ps`/`/proc` on the device. This is accepted because the node is a root-operated single-user machine.
 - **WiFi country code must be set.** On Raspberry Pi OS, an unset country leaves `wlan0` rfkill-blocked and every connect fails silently. The runbook makes `raspi-config nonint do_wifi_country <CC>` mandatory.
-- The scanner keeps its camera and aiming light running continuously. Current draw on the 5V rail is expected in the tens to low hundreds of mA but is **unmeasured**; see [docs/power.md](../../docs/power.md).
+- The scanner keeps its camera running continuously; its red aiming line is driven by the scan engine and may stay off while idle, so do not treat it as a power indicator. Current draw on the 5V rail is expected in the tens to low hundreds of mA but is **unmeasured**; see [docs/power.md](../../docs/power.md).
 
 ---
 

@@ -16,6 +16,14 @@ yellow       SDA     pin 3               GPIO2
 white        SCL     pin 5               GPIO3
 ===========  ======  ==================  =====
 
+The colours above are the M5Stack cable convention. Seeed-brand Grove
+cables are the reverse (yellow = SCL, white = SDA), so go by position, not
+colour: on every Grove connector the four wires sit in the fixed order
+SCL, SDA, VCC, GND -- the signal wire next to red is SDA (pin 3), the
+outermost signal wire, farthest from red, is SCL (pin 5). Swapping the two
+is harmless (both lines are pulled up to 3V3); ``i2cdetect`` simply shows
+nothing until they are the right way round.
+
 The unit is powered from 5V but its I2C lines are pulled up to 3V3 on the
 board, so they connect directly to the Pi without level shifting. Set the
 unit's slide switch to I2C mode. Enable the bus with ``dtparam=i2c_arm=on``
@@ -34,29 +42,46 @@ single message ``[lo, hi, data...]``.
 Name            Addr    R/W    Meaning
 ==============  ======  =====  ==========================================
 TRIGGER         0x0000  W      1 byte, start/stop scanning (manual mode)
-READY           0x0010  R/W    0 = no data, 1 = data ready,
-                               2 = read again; write 0 to clear
+READY           0x0010  R/W    0 = no data, 1 = data ready, 2 = data
+                               ready and a second decode arrived since
+                               the last read (buffer holds the latest;
+                               read it like 1); reset by a DATA read or
+                               by writing 0
 LENGTH          0x0020  R      2 bytes LE, decoded payload length
-TRIGGER_MODE    0x0030  R/W    0 = auto (default, always scanning),
+TRIGGER_MODE    0x0030  R/W    0 = auto (always scanning; believed to be
+                               the power-on default, unverified),
                                1 = manual (TRIGGER / button)
 TRIGGER_KEY     0x0040  R      0 = button pressed, 1 = not pressed
 FW_VERSION      0x00FE  R      1 byte, diagnostic only (see caveats)
-DATA            0x1000  R      0x1000..0x11FF, up to 512 payload bytes
+DATA            0x1000  R      up to 512 payload bytes, read in ONE
+                               transaction at 0x1000 (see below)
 ==============  ======  =====  ==========================================
 
 The daemon puts the unit in AUTO trigger mode so it scans continuously;
-the unit's buzzer beeps by itself on every successful decode.
+the unit's buzzer beeps by itself on every successful decode. The red
+aiming line is driven by the scan engine and may stay off while idle,
+even on a correctly powered unit; do not use it as a power indicator.
+
+DATA is read in a single transaction. The vendor firmware
+(M5Unit-QRCode-Internal-FW ``Slave_Complete_Callback``) serves the decode
+buffer from offset 0 for *any* register address in 0x1000..0x13FF and
+resets its TX index on every register-address write, so reading in chunks
+with an advancing address would return the first bytes again for every
+chunk. Both vendor drivers (Arduino ``getDecodeData``, UiFlow
+``get_qrcode_data``) read the whole LENGTH at 0x1000 in one go; so does
+this driver (at most 512 bytes, far below the 8192-byte I2C_RDWR limit).
 
 Verify on hardware (this driver was written without the device)
 ---------------------------------------------------------------
 
-* **Chunk size** -- how many DATA bytes the STM32 slave serves in one
-  transaction is unverified. ``read_payload`` reads ``chunk`` bytes at a
-  time (default 32, env ``WIFI_QR_READ_CHUNK``) with the register address
-  advanced by the offset (``0x1000 + offset``). Tune on the device.
+* **Single 512-byte read** -- the one-transaction DATA read above is what
+  the vendor drivers do, but a full-length read has not been exercised on
+  this Pi/kernel combination yet; RUNBOOK step 6b scans a payload longer
+  than 32 bytes to check it.
 * **Firmware-version register** -- the vendor I2C protocol sheet says
   0x00F0 while the Arduino library uses 0x00FE. This driver uses 0x00FE and
-  only ever logs the value; nothing depends on it.
+  only ever logs the value; nothing depends on it, and a NACK there is
+  reported as ``unknown``/``unreadable`` rather than as a failure.
 
 smbus2 is imported lazily so the module (and ``FakeScanner``) work on
 machines without it. ``UnitQRCode`` accepts an injected bus object exposing
@@ -70,7 +95,6 @@ from __future__ import annotations
 from typing import Any, Protocol
 
 DEFAULT_ADDR = 0x21
-DEFAULT_CHUNK = 32
 DATA_MAX = 512
 
 REG_TRIGGER = 0x0000
@@ -128,13 +152,9 @@ class UnitQRCode:
         self,
         bus: int | Any = 1,
         addr: int = DEFAULT_ADDR,
-        chunk: int = DEFAULT_CHUNK,
         msg_factory: Any | None = None,
     ) -> None:
-        if chunk < 1:
-            raise ValueError(f"chunk must be >= 1, got {chunk}")
         self.addr = addr
-        self.chunk = chunk
         self._owns_bus = isinstance(bus, int)
         if self._owns_bus or msg_factory is None:
             import smbus2  # lazy: only needed on the Pi
@@ -177,7 +197,7 @@ class UnitQRCode:
     # -- public API -----------------------------------------------------------
 
     def ready(self) -> int:
-        """READY register: 0 = nothing, 1 = data ready, 2 = read again."""
+        """READY register: 0 = nothing, 1 = data ready, 2 = data ready (two decodes since last read)."""
         return self._read_u8(REG_READY)
 
     def clear(self) -> None:
@@ -212,8 +232,9 @@ class UnitQRCode:
         """Read the decoded payload and clear READY.
 
         Reads LENGTH (2 bytes LE), rejects 0 or > 512 (clearing READY so a
-        bad frame does not wedge the loop), then reads DATA in ``chunk``-byte
-        pieces with the register address advanced by the offset.
+        bad frame does not wedge the loop), then reads all ``length`` DATA
+        bytes in ONE transaction at 0x1000 (the firmware ignores the address
+        offset within the DATA window, see the module docstring).
         """
         raw = self._read(REG_LENGTH, 2)
         length = int.from_bytes(raw, "little")
@@ -221,14 +242,9 @@ class UnitQRCode:
             self.clear()
             raise ScannerError(f"invalid payload length {length} (expected 1..{DATA_MAX})")
 
-        parts: list[bytes] = []
-        offset = 0
-        while offset < length:
-            n = min(self.chunk, length - offset)
-            parts.append(self._read(REG_DATA + offset, n))
-            offset += n
+        data = self._read(REG_DATA, length)
         self.clear()
-        return b"".join(parts)[:length]
+        return data[:length]
 
 
 class FakeScanner:

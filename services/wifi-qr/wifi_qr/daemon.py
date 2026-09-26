@@ -15,12 +15,16 @@ State machine (the unit is kept in AUTO trigger mode, so it scans all the time):
 
 Rules implemented here (design spec section 3, "daemon.py"):
 
-* start-up writes AUTO trigger mode and logs the firmware version; if the
-  bus does not answer it retries ``startup_retries`` times, ``startup_retry_delay``
-  seconds apart, then raises :class:`~wifi_qr.scanner.ScannerError` so
-  systemd's ``Restart=on-failure`` restarts the service;
-* READY==2 ("read again") is re-read immediately; three consecutive 2s clear
-  READY and drop the frame;
+* start-up writes AUTO trigger mode; if the bus does not answer it retries
+  ``startup_retries`` times, ``startup_retry_delay`` seconds apart, then
+  raises :class:`~wifi_qr.scanner.ScannerError` so systemd's
+  ``Restart=on-failure`` restarts the service. The firmware version is read
+  afterwards for the log only: its register address is unverified (spec
+  section 2), so a failure there is logged as ``firmware=unknown`` and never
+  blocks start-up;
+* READY==2 means a second decode arrived before the first was read (the
+  firmware counter saturates at 2 and stays there until DATA is read); the
+  buffer holds the latest decode, so it is read exactly like READY==1;
 * dedupe: a credential equal to the last applied one, while
   ``backend.current_ssid()`` still reports that SSID, is ignored. Anything
   else (other SSID, same SSID with a different password, not connected) is
@@ -29,7 +33,9 @@ Rules implemented here (design spec section 3, "daemon.py"):
   scanned meanwhile is not applied by accident;
 * ``OSError`` from the bus is logged and followed by a 1 s pause; after
   ``max_i2c_errors`` consecutive failures :class:`ScannerError` is raised
-  (again leaving the restart to systemd).
+  (again leaving the restart to systemd). "Consecutive" counts whole polls:
+  the budget is reset only after a poll that read READY==0, or after
+  ``read_payload()`` returned, never merely because READY itself answered.
 
 Feedback hook (future status LED)
 ---------------------------------
@@ -52,7 +58,7 @@ DEBUG, because a malformed payload may still contain a password.
 
 Log lines (INFO unless noted; RUNBOOK.md greps for these tokens)::
 
-    scanner ready: firmware=0x.. trigger_mode=auto
+    scanner ready: firmware=<0x..|unknown> trigger_mode=auto
     ready=<0|1|2>                                   (DEBUG, --verbose)
     scan received: WifiCredential(ssid='..', password=***, security=.., hidden=..)
     applying: ssid='..'
@@ -75,8 +81,6 @@ from wifi_qr.scanner import READY_AGAIN, READY_DATA, READY_NONE, Scanner, Scanne
 
 logger = logging.getLogger("wifi_qr.daemon")
 
-#: How many consecutive READY==2 answers we tolerate before clearing.
-_READY_AGAIN_LIMIT = 3
 #: Pause after an I2C OSError before polling again.
 _I2C_ERROR_PAUSE = 1.0
 #: Characters of a ``WIFI:`` payload that may be logged when it is rejected.
@@ -180,14 +184,14 @@ class Daemon:
     def start(self) -> None:
         """Put the unit in AUTO trigger mode and log its firmware version.
 
-        Retries on ``OSError``/``ScannerError`` and raises ``ScannerError``
-        once the retries are exhausted.
+        Retries the trigger-mode write on ``OSError``/``ScannerError`` and
+        raises ``ScannerError`` once the retries are exhausted. The firmware
+        version read is diagnostic only and cannot fail start-up.
         """
         attempts = self._startup_retries + 1
         for attempt in range(1, attempts + 1):
             try:
                 self._scanner.set_trigger_mode(auto=True)
-                version = self._scanner.firmware_version()
             except (OSError, ScannerError) as exc:
                 self._emit(FeedbackEvent.SCANNER_ERROR)
                 if attempt >= attempts:
@@ -200,23 +204,28 @@ class Daemon:
                 )
                 self._sleep(self._startup_retry_delay)
                 continue
-            logger.info("scanner ready: firmware=0x%02x trigger_mode=auto", version)
+            logger.info("scanner ready: firmware=%s trigger_mode=auto", self._firmware_text())
             self._emit(FeedbackEvent.SCANNER_READY)
             return
+
+    def _firmware_text(self) -> str:
+        """``0x..`` from the FW register, or ``unknown`` if it cannot be read."""
+        try:
+            return f"0x{self._scanner.firmware_version():02x}"
+        except (OSError, ScannerError) as exc:
+            logger.warning("firmware version unreadable (register 0x00FE, diagnostic only): %s", exc)
+            return "unknown"
 
     def step(self) -> bool:
         """One poll. Returns True when a payload was read and handled."""
         try:
             status = self._poll_ready()
             if status == READY_NONE:
+                self._i2c_errors = 0
                 return False
-            if status == READY_AGAIN:
-                logger.warning(
-                    "ready=2 for %d consecutive reads; clearing READY", _READY_AGAIN_LIMIT
-                )
-                self._scanner.clear()
-                return False
+            # READY_DATA and READY_AGAIN alike: the buffer holds the latest decode.
             raw = self._scanner.read_payload()
+            self._i2c_errors = 0
         except OSError as exc:
             self._handle_i2c_error(exc)
             return False
@@ -236,13 +245,8 @@ class Daemon:
     # -- internals ------------------------------------------------------------ #
 
     def _poll_ready(self) -> int:
-        """Read READY, re-reading immediately while it says 2 (up to the limit)."""
+        """Read READY once and log it at DEBUG (0 = idle, 1/2 = data waiting)."""
         status = self._scanner.ready()
-        reads = 1
-        while status == READY_AGAIN and reads < _READY_AGAIN_LIMIT:
-            status = self._scanner.ready()
-            reads += 1
-        self._i2c_errors = 0
         # --verbose diagnostics without flooding: log the first poll, every
         # non-zero READY and each transition back to 0.
         if status != READY_NONE or status != self._last_ready:

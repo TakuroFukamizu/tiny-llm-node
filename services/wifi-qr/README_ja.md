@@ -42,6 +42,8 @@
 | 黄 | SDA | pin 3 | GPIO2 |
 | 白 | SCL | pin 5 | GPIO3 |
 
+**線色は M5Stack 製ケーブルの慣習です。Seeed 製 Grove ケーブルは逆（黄 = SCL、白 = SDA）**なので、色ではなく位置で確認してください: Grove コネクタの 4 線は必ず SCL・SDA・VCC・GND の順に並んでいるため、赤の隣の信号線が SDA（pin 3）、赤から最も遠い外側の信号線が SCL（pin 5）です。2 本を入れ替えても電気的には無害で（両線とも 3V3 プルアップ）、正しくなるまで `i2cdetect` に何も出ないだけです。
+
 取り付け: 視野角が ±55° と広いため、視野を横切った QR コードを何でも読んでしまいます。机や画面ではなく、利用者が自然にスマートフォンをかざす位置（ノード前面など）を向くように固定してください。ユニットはデコードに成功するたびにブザーが鳴ります。
 
 ---
@@ -59,13 +61,13 @@ WIFI:T:WPA;S:Hidden;P:secret123;H:true;;
 
 | フィールド | 意味 |
 |---|---|
-| `T` | 認証方式: `WPA`、`WPA2`、`WPA3`、`SAE`、`WEP`、`nopass`、または空（= オープン）。大文字小文字は区別しない |
+| `T` | 認証方式: `WPA`、`WPA2`、`WPA3`、`SAE`、`WEP`、`nopass`、または空（= オープン）。大文字小文字は区別しない。`WPA`/`WPA2`/`WPA3` はいずれも `wpa-psk` で適用する（`WPA3` は WPA2/WPA3 混在モードの意味）。WPA3-only の AP には `SAE` を使う |
 | `S` | SSID（必須） |
 | `P` | パスワード。WPA/WEP では必須。WPA は 8〜63 文字 |
 | `H` | 隠し SSID なら `true` |
 
 エスケープ: `S` と `P` の中の `;` `:` `,` `\` は `\;` `\:` `\,` `\\` と書きます。
-`WPA-EAP`（企業向け認証）および `E:` `A:` `I:` `PH2:` キーは非対応として拒否します。
+`WPA-EAP`（企業向け認証）および `E:` `A:` `I:` `PH2:` キーは非対応として拒否します。`S` や `P` の中の制御文字（NUL、改行など）も拒否します。
 
 **Android** は「WiFi 設定 → 共有」でこの形式をそのまま出力します。**iOS** ではショートカットや任意の QR 生成ツールを使います。Mac や Linux の端末では:
 
@@ -79,7 +81,7 @@ qrencode -t ANSIUTF8 'WIFI:T:WPA;S:MyNet;P:pass1234;;'
 ## 動作の仕組み
 
 1. デーモンは I2C 経由でスキャナーの `READY` レジスタを 200 ms ごとにポーリングします（`WIFI_QR_POLL_INTERVAL`）。
-2. データが用意できると、ペイロードを読み出し（長さレジスタ → データレジスタを 32 バイト単位で分割読み出し）、`READY` をクリアし、`WIFI:` 文字列を解析します。
+2. データが用意できると（`READY` = 1。ポーリングの間に 2 回デコードされた場合は 2 になるが、どちらも同じように読む）、ペイロードを読み出し（長さレジスタ → データレジスタから全長を 1 回で読み出し。ファームウェアはデータ領域内のアドレスオフセットを無視するため、分割読み出しは 1 チャンクより長いデータを壊す）、`READY` をクリアし、`WIFI:` 文字列を解析します。
 3. 資格情報を `nmcli` で **`wifi-qr-<ssid>` という名前の永続 NetworkManager プロファイル**として適用します。同名の既存プロファイルは置き換えるので、パスワード変更後に再スキャンすればそのまま使えます。
 4. `nmcli connection up` を最大 30 秒待ちます。成功すると SSID とインターフェースのアドレスをログに出し、失敗するとプロファイルを削除します。
 
@@ -97,7 +99,7 @@ python3 -m wifi_qr --once      # 1 回適用したら終了
 python3 -m wifi_qr --verbose   # DEBUG ログ
 ```
 
-フラグは組み合わせられます（テストでは `--dry-run --once` が定番）。インストール済みの実機では `sudo PYTHONPATH=/opt/wifi-qr python3 -m wifi_qr ...` で実行し、I2C バスを空けるために先にサービスを停止してください。
+フラグは組み合わせられます（テストでは `--dry-run --once` が定番）。インストール済みの実機では `sudo PYTHONPATH=/opt/wifi-qr python3 -m wifi_qr ...` で実行し、I2C バスを空けるために先にサービスを停止してください。`--probe` はトリガーモードの読み出しで応答の有無を判定します。ファームウェアバージョンのレジスタアドレスは未確認のため、その読み出しだけが失敗した場合は `firmware version: unreadable (...)` と表示して終了コード 0 のままです（デーモンも同様に `firmware=unknown` とログに出して通常どおり起動します）。
 
 ### 設定（`/etc/default/wifi-qr`）
 
@@ -109,7 +111,6 @@ systemd ユニットは次の環境変数を `/etc/default/wifi-qr` から読み
 | `WIFI_QR_I2C_ADDR` | `0x21` | スキャナーの I2C アドレス |
 | `WIFI_QR_IFACE` | `wlan0` | nmcli に渡す WiFi インターフェース |
 | `WIFI_QR_POLL_INTERVAL` | `0.2` | `READY` ポーリング間隔（秒） |
-| `WIFI_QR_READ_CHUNK` | `32` | データレジスタの 1 回の I2C 読み出しバイト数 |
 | `WIFI_QR_FAKE_SCANNER` | _（未設定）_ | `WIFI:...` ペイロードを設定すると、I2C の代わりにメモリ上の偽スキャナーを使う（ハードウェア無しのテスト用） |
 
 ---
@@ -123,7 +124,7 @@ cd ~/tiny-llm-node/services/wifi-qr
 sudo ./install.sh
 ```
 
-インストーラは冪等です。`python3-smbus2` と `i2c-tools` を導入し、`/boot/firmware/config.txt` で I2C を有効化し、パッケージを `/opt/wifi-qr/` に配置し、`/etc/default/wifi-qr` が無ければ作成し、`wifi-qr.service` を有効化して起動します。**I2C を今回初めて有効化した場合は「再起動が必要」と表示して終了コード 3 で終わります** — 再起動してから続けてください。
+インストーラは冪等です。`python3-smbus2` と `i2c-tools` を導入し、`/boot/firmware/config.txt` で I2C を有効化し、パッケージを `/opt/wifi-qr/` に配置し、`/etc/default/wifi-qr` が無ければ作成し、`wifi-qr.service` を有効化して起動します。Pi 5 では `raspi-config` が I2C オーバーレイをその場で適用するため、初回の有効化でも通常はサービスが起動して終了コード 0 で終わります。**I2C を有効化しても `/dev/i2c-1` が現れない場合に限り `REBOOT REQUIRED:` と表示して終了コード 3 で終わります** — 再起動してから続けてください。
 
 ```bash
 journalctl -u wifi-qr -f       # ログを追う
@@ -153,7 +154,7 @@ nmcli -t -f NAME connection show | grep '^wifi-qr-' | xargs -r -n1 sudo nmcli co
 - 資格情報は NetworkManager のキーファイル（`/etc/NetworkManager/system-connections/`、パーミッション 0600）にのみ保存されます。
 - パスワードは**ログには絶対に出しません**。`WifiCredential` は `repr()`/`str()` でマスクし、nmcli の失敗出力もそのまま出さず要約します。ただし `nmcli` の引数として渡すため、実機の `ps`/`/proc` から瞬間的に見えます。root で運用する単一利用者機であるため、これは許容しています。
 - **WiFi の国コードを必ず設定してください。** Raspberry Pi OS は国コード未設定だと `wlan0` が rfkill でブロックされたままになり、接続が黙って失敗します。runbook では `raspi-config nonint do_wifi_country <CC>` を必須手順にしています。
-- スキャナーはカメラと照準ライトが常時動作します。5V 系の消費電流は数十〜百数十 mA 程度の見込みですが**未計測**です。[docs/power.md](../../docs/power.md) を参照。
+- スキャナーのカメラは常時動作します。赤い照準ライトはスキャンエンジンが制御しており、アイドル中は消えている可能性があるため、給電の目安にしないでください。5V 系の消費電流は数十〜百数十 mA 程度の見込みですが**未計測**です。[docs/power.md](../../docs/power.md) を参照。
 
 ---
 

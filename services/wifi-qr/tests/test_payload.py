@@ -264,6 +264,18 @@ def test_unsupported_auth_is_a_payload_error() -> None:
         "WIFI:T:WPA4;S:MyNet;P:pass1234;;",  # unknown T
         "WIFI:T:PSK;S:MyNet;P:pass1234;;",
         "WIFI:T:OPEN;S:MyNet;;",
+        # Control characters inside a value: a NUL cannot cross argv at all
+        # (subprocess raises ValueError) and a newline in the SSID breaks the
+        # line-based profile lookup and the log, so both are rejected.
+        "WIFI:T:WPA;S:Ca\x00fe;P:pass1234;;",
+        "WIFI:T:WPA;S:MyNet;P:pass\x001234;;",
+        "WIFI:T:WPA;S:Ca\nfe;P:pass1234;;",
+        "WIFI:T:WPA;S:MyNet;P:pass\n1234;;",
+        "WIFI:T:WPA;S:Ca\rfe;P:pass1234;;",
+        "WIFI:T:WPA;S:Ca\x1bfe;P:pass1234;;",  # ESC
+        "WIFI:T:WPA;S:MyNet;P:pass\x7f1234;;",  # DEL
+        "WIFI:T:nopass;S:Open\x00Cafe;;",
+        "WIFI:T:WEP;S:MyNet;P:ab\x00cd;;",
     ],
 )
 def test_malformed_payloads_raise_payload_error(text: str) -> None:

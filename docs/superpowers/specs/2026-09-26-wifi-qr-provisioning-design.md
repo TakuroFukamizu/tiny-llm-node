@@ -64,6 +64,8 @@ I2C ラインは 3.3V ロジックなので **Raspberry Pi の GPIO に直結で
 | 黄 | SDA | pin 3 | GPIO2 |
 | 白 | SCL | pin 5 | GPIO3 |
 
+線色は M5Stack 製ケーブルの慣習。Seeed 製 Grove ケーブルは逆（黄 = SCL、白 = SDA）なので、色ではなく位置で確認する: Grove コネクタの 4 線は SCL・SDA・VCC・GND の順に固定されており、赤の隣の信号線が SDA、赤から最も遠い外側の信号線が SCL。入れ替えても無害（両線とも 3V3 プルアップ）。
+
 必要部品: Grove–ジャンパ（メス）変換ケーブル 1 本。
 X1010 は Pi の下面に付くため 40 ピンヘッダは上面に露出しており、アクティブクーラーとも干渉しない。
 
@@ -71,7 +73,8 @@ X1010 は Pi の下面に付くため 40 ピンヘッダは上面に露出して
 
 - STM32 の I2C スレーブはクロックストレッチを行うことが多い。Pi 5（RP1）では問題ないとされるが、旧世代 Pi では既知の不具合がある。**Pi 5 のみを対象**とし、runbook の最初の検証項目で確認する
 - ファームウェアバージョンのレジスタは I2C プロトコル表では 0x00F0、Arduino ライブラリでは 0x00FE と記載が食い違う。診断表示にのみ使い、動作には依存させない
-- データレジスタ（0x1000〜0x11FF）を 1 トランザクションで何バイトまで読めるかは未確認。既定は 32 バイト単位の分割読み出しとし、実機で調整する
+- データレジスタ（0x1000〜）は **1 トランザクションで全長を読む**（最大 512 バイト）。ベンダーファームウェア（M5Unit-QRCode-Internal-FW の `Slave_Complete_Callback`）はデータ領域内のどのアドレスを指定してもバッファ先頭から送り、レジスタアドレス書き込みのたびに送信インデックスを 0 に戻すため、アドレスを進めながらの分割読み出しは 2 チャンク目以降が先頭の再送になり成立しない（Arduino / UiFlow のベンダードライバも全長を一括で読む）。Linux の I2C_RDWR は 1 メッセージ 8192 バイトまで許すので 512 バイトの一括読みは問題ないはずだが、実機では未検証。runbook 6b で 32 バイト超のテスト QR を読んで確認する
+- 照準ライト（赤いライン）はスキャンエンジンが制御し、ファームウェアは最初の I2C 通信までエンジンを設定しない。エンジン既定ではアイドル中に消灯している可能性があるため、点灯を給電の判定に使わない（runbook Step 2 は参考情報とし、確定判定は `i2cdetect` で行う）
 
 ---
 
@@ -111,7 +114,7 @@ venv や pip は使わない（PEP 668 の外部管理環境を避け、apt の�
 
 - `smbus2.SMBus` と `i2c_msg` の `i2c_rdwr` で、2 バイト（リトルエンディアン）のレジスタアドレス書き込み → repeated start → 読み出しを行う
 - レジスタ: `TRIGGER=0x0000`, `READY=0x0010`, `LENGTH=0x0020`, `TRIGGER_MODE=0x0030`, `TRIGGER_KEY=0x0040`, `FW_VERSION=0x00FE`（診断のみ）, `DATA=0x1000`
-- API: `ready() -> int`（0/1/2）、`read_payload() -> bytes`（長さ読み出し → 分割読み出し → READY に 0 を書いてクリア）、`set_trigger_mode(auto: bool)`、`firmware_version() -> int`
+- API: `ready() -> int`（0/1/2）、`read_payload() -> bytes`（長さ読み出し → DATA を 0x1000 から全長 1 回で読み出し → READY に 0 を書いてクリア）、`set_trigger_mode(auto: bool)`、`firmware_version() -> int`
 - 長さが 0 または 512 超なら `ScannerError` を送出し、READY をクリアする
 - I2C の `OSError` はそのまま上位へ伝播させ、daemon 側でリトライする
 
@@ -119,9 +122,9 @@ venv や pip は使わない（PEP 668 の外部管理環境を避け、apt の�
 
 - 標準形式 `WIFI:T:WPA;S:ssid;P:pass;H:false;;` を解釈する
 - エスケープ `\;` `\:` `\,` `\\` を解除する
-- `T` は大文字小文字を無視し、`WPA` / `WPA2` / `WPA3` / `SAE` / `WEP` / `nopass` / 空を受け付ける。`WPA-EAP` および `E:` `A:` `I:` `PH2:` キーの存在は `UnsupportedAuth` として拒否する
+- `T` は大文字小文字を無視し、`WPA` / `WPA2` / `WPA3` / `SAE` / `WEP` / `nopass` / 空を受け付ける。nmcli の key-mgmt への対応は `WPA` / `WPA2` / `WPA3` → `wpa-psk`（`WPA3` は WPA2/WPA3 混在モードの意味）、`SAE` → `sae`（WPA3-only の AP はこちら）、`WEP` → `none` + WEP キー、`nopass` / 空 → 指定なし。`WPA-EAP` および `E:` `A:` `I:` `PH2:` キーの存在は `UnsupportedAuth` として拒否する
 - `H:true` は隠し SSID として扱う
-- `S` が空、`WPA` 系・`WEP` で `P` が空、`WPA` 系で `P` が 8〜63 文字の範囲外（WPA-PSK の制約。WEP は長さ検証しない）、`WIFI:` 接頭辞なし、はいずれも `PayloadError`
+- `S` が空、`WPA` 系・`WEP` で `P` が空、`WPA` 系で `P` が 8〜63 文字の範囲外（WPA-PSK の制約。WEP は長さ検証しない）、`WIFI:` 接頭辞なし、`S` または `P` に制御文字（0x00〜0x1F、0x7F。NUL は argv に渡せず、改行はプロファイル名の照合とログを壊す）、はいずれも `PayloadError`
 - 戻り値は `WifiCredential(ssid, password, security, hidden)` の frozen dataclass。`__repr__` でパスワードをマスクする
 
 **network.py — `NetworkManagerBackend`**
@@ -153,12 +156,12 @@ IDLE --(READY==1)--> READ --(parse ok)--> APPLY --(ok)--> IDLE
                         +--(parse error)-----+--(fail)--> IDLE
 ```
 
-- 起動時: `set_trigger_mode(auto=True)` を書き、ファームウェアバージョンをログに出す。I2C が応答しなければ 5 秒間隔で最大 12 回リトライしてから終了する（systemd の `Restart=on-failure` で再起動）
+- 起動時: `set_trigger_mode(auto=True)` を書く。I2C が応答しなければ 5 秒間隔で最大 12 回リトライしてから終了する（systemd の `Restart=on-failure` で再起動）。その後ファームウェアバージョンをログに出すが、これは診断専用（第 2 節）なので読めなければ `firmware=unknown` と記録して起動を続ける。`--probe` も同様にトリガーモードの読み出しで応答を判定し、FW だけ読めなければ `firmware version: unreadable (...)` と表示して終了コード 0 とする
 - ポーリング間隔は既定 200 ms
-- READY==2 の場合は即座に再読み出しし、3 回連続で 2 なら READY をクリアして捨てる
+- READY==2 は「前回の読み出し以降に 2 回以上デコードした」状態（ファームウェアのカウンタは 2 で飽和し、DATA を読むか 0 を書くまで保持される）。バッファには最新のデコード結果があるので、1 と同様にそのまま `read_payload()` する（再ポーリングや破棄はしない）
 - **重複抑止**: 直前に適用した資格情報と同一で、かつ `current_ssid()` が一致して接続済みなら、適用せず「already connected」をログして無視する。それ以外（別 SSID、同 SSID でパスワード違い、未接続）は常に適用する
 - 適用中（`APPLY`）は新たなスキャンを無視し、完了後に READY をクリアして取りこぼしをなくす
-- I2C の `OSError` は 1 秒待って継続する。連続 30 回で終了する（systemd 再起動）
+- I2C の `OSError` は 1 秒待って継続する。連続 30 回で終了する（systemd 再起動）。「連続」はポーリング 1 回の全体で数える: READY==0 を読めたとき、または `read_payload()` が返ったときだけカウンタを 0 に戻す（READY が読めても LENGTH/DATA の読み出しが失敗し続ければカウンタは進む）
 - 依存（scanner / backend / feedback / sleep）はコンストラクタ注入とし、テストでは偽物を差し込む
 
 **__main__.py — CLI**
@@ -173,7 +176,7 @@ IDLE --(READY==1)--> READ --(parse ok)--> APPLY --(ok)--> IDLE
 
 設定は環境変数（`/etc/default/wifi-qr` を systemd の `EnvironmentFile` で読む）:
 `WIFI_QR_I2C_BUS=1`, `WIFI_QR_I2C_ADDR=0x21`, `WIFI_QR_IFACE=wlan0`,
-`WIFI_QR_POLL_INTERVAL=0.2`, `WIFI_QR_READ_CHUNK=32`
+`WIFI_QR_POLL_INTERVAL=0.2`（手動実行時は `sudo VAR=値 ... python3 -m wifi_qr` と `sudo` の直後に付ける。`/etc/default/wifi-qr` は systemd だけが読む）
 
 ### systemd ユニット
 
@@ -217,7 +220,7 @@ WIFI:T:WPA;S:Hidden;P:secret123;H:true;;
 - 資格情報は NetworkManager のキーファイル（`/etc/NetworkManager/system-connections/`、0600）にのみ保存される
 - ログにパスワードを出さない。`WifiCredential.__repr__` でマスクし、nmcli の失敗出力もそのまま出さずに要約する
 - **WiFi 国コード**: Raspberry Pi OS は国コード未設定だと wlan0 が rfkill でブロックされ、QR を読んでも黙って失敗する。runbook で `raspi-config nonint do_wifi_country <CC>` を必須手順にする（既定 JP、runbook の引数）
-- スキャナーは常時カメラと照準ライトが動作する。消費電力は 5V 系で数十〜百数十 mA 程度の見込み（未計測）。power.md の予算に「未計測・要実測」として追記する
+- スキャナーは常時カメラが動作する（照準ライトはエンジン制御で、アイドル中は消えている可能性がある）。消費電力は 5V 系で数十〜百数十 mA 程度の見込み（未計測）。power.md の予算に「未計測・要実測」として追記する
 
 ---
 
@@ -247,7 +250,8 @@ Claude Code が実機上で実行することを前提に、次の性質をも�
 - 各ステップは「実行するコマンド」「期待する出力」「失敗時の分岐」の 3 点セットで書く
 - 前提確認から始める: `uname -r`、`nmcli general`、`ls /dev/i2c-*`、`rfkill list`
 - 段階的に検証する: (1) `i2cdetect -y 1` で `21` が見える → (2) `--probe` でファームウェア応答 → (3) `--dry-run --once` でテスト用 QR を読める → (4) `--once` で実際に接続 → (5) サービス有効化 → (6) 再起動後の自動起動と再接続
-- テスト用 QR は runbook 内で `qrencode` により端末に表示する（実 SSID を使うか、`WIFI:T:nopass;S:wifi-qr-test;;` のダミーで dry-run する）
+- テスト用 QR は利用者自身の端末（スマートフォン／PC の QR 生成ツール）で表示してもらうか、Pi で `qrencode` の PNG を作って渡す（Claude Code が実行する場合、端末に描画した ANSI QR は利用者の画面に届かない）。ダミーは `WIFI:T:nopass;S:wifi-qr-test-...;;` のオープンネットワークで dry-run し、32 バイトを超える文字列にして DATA 一括読み出しを検証する
+- 手動実行の `--once` は `timeout` で有界にし、SSH が WiFi 経由の場合は `systemd-run` で切り離して journal から結果を読む。`journalctl -f` のような終了しないコマンドは使わない
 - 破壊的操作（`config.txt` 編集、再起動）は明示し、再起動が必要なステップでは runbook を中断して再開位置を示す
 - 最後に「実測値の記録」欄を設け、README への反映を促す
 
@@ -255,7 +259,7 @@ Claude Code が実機上で実行することを前提に、次の性質をも�
 
 ## 8. テスト
 
-- **ユニットテスト（Mac で実行）**: `pytest` で `payload.py`（正常系・エスケープ・各認証方式・異常系）、`daemon.py`（偽スキャナーと偽バックエンドで状態遷移、重複抑止、READY==2、I2C エラーのリトライ、Feedback イベントの発火順）、`network.py`（nmcli に渡す引数の組み立てと失敗時のクリーンアップ。subprocess は偽物）、`scanner.py`（偽 I2C バスでレジスタアドレスのエンコードと分割読み出し）
+- **ユニットテスト（Mac で実行）**: `pytest` で `payload.py`（正常系・エスケープ・各認証方式・異常系）、`daemon.py`（偽スキャナーと偽バックエンドで状態遷移、重複抑止、READY==2、I2C エラーのリトライ、Feedback イベントの発火順）、`network.py`（nmcli に渡す引数の組み立てと失敗時のクリーンアップ。subprocess は偽物）、`scanner.py`（偽 I2C バスでレジスタアドレスのエンコードと DATA の一括読み出し）
 - **ハードウェア無しでの結合確認**: `--dry-run` は `WIFI_QR_FAKE_SCANNER=<payload>` を指定すると偽スキャナーを使い、I2C なしで CLI を通せるようにする（テストと runbook の前段で使う）
 - **実機テスト**: RUNBOOK.md の段階的検証
 
