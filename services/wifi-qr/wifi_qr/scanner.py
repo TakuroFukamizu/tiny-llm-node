@@ -235,6 +235,10 @@ class UnitQRCode:
         bad frame does not wedge the loop), then reads all ``length`` DATA
         bytes in ONE transaction at 0x1000 (the firmware ignores the address
         offset within the DATA window, see the module docstring).
+
+        The firmware already sets READY to 0 when DATA is read; the explicit
+        ``clear()`` afterwards is belt-and-braces. It can wipe a decode that
+        landed mid-read, which is acceptable under always-on scanning.
         """
         raw = self._read(REG_LENGTH, 2)
         length = int.from_bytes(raw, "little")
