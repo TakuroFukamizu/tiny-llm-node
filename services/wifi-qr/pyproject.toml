@@ -1,0 +1,13 @@
+[project]
+name = "wifi-qr"
+version = "0.1.0"
+description = "Headless WiFi provisioning for tiny-llm-node via M5Stack Unit QRCode (I2C)"
+requires-python = ">=3.11"
+dependencies = ["smbus2>=0.4"]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

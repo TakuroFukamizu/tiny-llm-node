@@ -34,7 +34,7 @@ tiny-llm-node は可搬性を掲げているが、持ち込んだ先のネット
 - WPA-EAP（企業向け認証）。QR に `T:WPA-EAP` 等が含まれる場合は明示的に拒否してログに残す
 - スキャナー本体のファームウェア更新、ユニット側の設定変更（ブザー音量など）
 - UART モードでの接続（I2C のみ対応）
-- 接続結果を画面や音で通知する仕組み（Pi 本体の ACT LED による最小限のフィードバックのみ）
+- 接続結果を画面・音・LED で通知する仕組み。**ステータス LED は今後別途実装する**（第 10 節）。本機能ではデーモンに通知用のフック（`Feedback` インターフェース）だけを用意し、既定は何もしない実装とする
 
 ---
 
@@ -94,8 +94,7 @@ services/wifi-qr/
     scanner.py         Unit QRCode I2C ドライバ
     payload.py         WIFI: ペイロードのパーサ
     network.py         NetworkManager（nmcli）ラッパー
-    feedback.py        ACT LED によるフィードバック
-    daemon.py          ポーリングループと状態管理
+    daemon.py          ポーリングループと状態管理、Feedback フック
   tests/
     test_payload.py
     test_daemon.py
@@ -137,10 +136,12 @@ venv や pip は使わない（PEP 668 の外部管理環境を避け、apt の�
 - パスワードは nmcli の引数として渡す。root 権限の単一利用者機であり、`ps` からの瞬間的な露出は許容する（README に明記）。ログには絶対に出力しない
 - テスト用に `subprocess.run` 相当の呼び出しを注入できるようにする
 
-**feedback.py — `ActLed`**
+**daemon.py — `Feedback` フック（将来のステータス LED 用）**
 
-- `/sys/class/leds/ACT/brightness` を直接書いて点滅させる。成功: 長点滅 3 回、失敗: 短点滅 6 回、待機時はトリガーを元に戻す（`trigger` を開始時に保存し、終了時に復元）
-- sysfs が存在しない（Mac やテスト環境）場合は何もしない `NullFeedback` にフォールバックする
+- `Feedback` は `on_event(event: FeedbackEvent) -> None` を持つ Protocol。`FeedbackEvent` は
+  `SCANNER_READY` / `SCAN_RECEIVED` / `APPLYING` / `CONNECTED` / `FAILED` / `SCANNER_ERROR` の Enum
+- 既定実装は `NullFeedback`（何もしない）。デーモンは状態遷移のたびに `on_event` を呼ぶ
+- ステータス LED を実装する際は、この Protocol を実装するクラスを追加し、`__main__.py` で差し替える（第 10 節）
 
 **daemon.py — `Daemon`**
 
@@ -172,12 +173,12 @@ IDLE --(READY==1)--> READ --(parse ok)--> APPLY --(ok)--> IDLE
 
 設定は環境変数（`/etc/default/wifi-qr` を systemd の `EnvironmentFile` で読む）:
 `WIFI_QR_I2C_BUS=1`, `WIFI_QR_I2C_ADDR=0x21`, `WIFI_QR_IFACE=wlan0`,
-`WIFI_QR_POLL_INTERVAL=0.2`, `WIFI_QR_READ_CHUNK=32`, `WIFI_QR_LED=1`
+`WIFI_QR_POLL_INTERVAL=0.2`, `WIFI_QR_READ_CHUNK=32`
 
 ### systemd ユニット
 
 - `After=NetworkManager.service`、`Wants=NetworkManager.service`
-- root で実行（`/dev/i2c-1` と nmcli の両方が必要なため）。`ProtectSystem=strict`, `ProtectHome=yes`, `PrivateTmp=yes`, `NoNewPrivileges=yes`, `ReadWritePaths=/sys/class/leds`
+- root で実行（`/dev/i2c-1` と nmcli の両方が必要なため）。`ProtectSystem=strict`, `ProtectHome=yes`, `PrivateTmp=yes`, `NoNewPrivileges=yes`
 - `Restart=on-failure`, `RestartSec=5`
 - ログは journald（`journalctl -u wifi-qr`）
 
@@ -254,7 +255,7 @@ Claude Code が実機上で実行することを前提に、次の性質をも�
 
 ## 8. テスト
 
-- **ユニットテスト（Mac で実行）**: `pytest` で `payload.py`（正常系・エスケープ・各認証方式・異常系）、`daemon.py`（偽スキャナーと偽バックエンドで状態遷移、重複抑止、READY==2、I2C エラーのリトライ）、`network.py`（nmcli に渡す引数の組み立てと失敗時のクリーンアップ。subprocess は偽物）
+- **ユニットテスト（Mac で実行）**: `pytest` で `payload.py`（正常系・エスケープ・各認証方式・異常系）、`daemon.py`（偽スキャナーと偽バックエンドで状態遷移、重複抑止、READY==2、I2C エラーのリトライ、Feedback イベントの発火順）、`network.py`（nmcli に渡す引数の組み立てと失敗時のクリーンアップ。subprocess は偽物）、`scanner.py`（偽 I2C バスでレジスタアドレスのエンコードと分割読み出し）
 - **ハードウェア無しでの結合確認**: `--dry-run` は `WIFI_QR_FAKE_SCANNER=<payload>` を指定すると偽スキャナーを使い、I2C なしで CLI を通せるようにする（テストと runbook の前段で使う）
 - **実機テスト**: RUNBOOK.md の段階的検証
 
@@ -265,7 +266,29 @@ Claude Code が実機上で実行することを前提に、次の性質をも�
 1. `payload.py` + テスト
 2. `network.py` + テスト
 3. `scanner.py`（実機がないためロジックのみ。I2C 呼び出しは注入可能に）
-4. `daemon.py` + `feedback.py` + テスト
+4. `daemon.py`（`Feedback` フック含む）+ テスト
 5. `__main__.py`、`install.sh`、`wifi-qr.service`、env 雛形
 6. README（EN/ja）、RUNBOOK.md
 7. 既存 docs の追記
+
+---
+
+## 10. 将来の拡張: ステータス LED（本仕様では実装しない）
+
+ヘッドレス運用では「QR を読んだが接続に失敗した」ことを利用者が知る手段がない。
+ノード全体のステータス LED を実装する際に、本デーモンの `Feedback` フックへ接続する。
+
+| イベント | 想定する表示 |
+|---|---|
+| `SCANNER_READY` | 待機（スキャン可能） |
+| `SCAN_RECEIVED` | 読み取り確認（短い点灯） |
+| `APPLYING` | 接続試行中（点滅） |
+| `CONNECTED` | 成功（一定時間点灯後、待機へ） |
+| `FAILED` | 失敗（速い点滅） |
+| `SCANNER_ERROR` | I2C 応答なし |
+
+実装時の要点:
+
+- `daemon.py` の `Feedback` Protocol を実装するクラスを追加し、`__main__.py` で `NullFeedback` と差し替える
+- LED の物理実装（GPIO 直結、Pi 本体 ACT LED、I2C LED ドライバ等）はステータス LED の設計で決める。本デーモンは LED の種類に依存しない
+- 接続成功時に IP アドレスを伝える手段（LED では表現できない）は別途検討する。当面は mDNS（`<hostname>.local`）で到達する
