@@ -203,6 +203,14 @@ Measured reference (RTX 4060, qwen3:8b Q4, warm): **43 tok/s generation, ~615 to
 
 ---
 
+## 8. WiFi provisioning by QR code (optional)
+
+**Not verified on hardware as of 2026-09-26** — desk design only, unlike the sections above.
+
+An M5Stack Unit QRCode connected to the Pi's I2C GPIO pins lets the headless node join a WiFi network by holding up a phone's WiFi share QR code; the `wifi-qr` daemon parses it and creates a NetworkManager profile. Wiring is in [hardware.md](hardware.md). See [services/wifi-qr/README.md](../services/wifi-qr/README.md) for the overview and [services/wifi-qr/RUNBOOK.md](../services/wifi-qr/RUNBOOK.md) for the step-by-step on-device setup (written for Claude Code to execute).
+
+---
+
 ## Troubleshooting
 
 | Symptom | Cause | Fix |

@@ -1,0 +1,30 @@
+[Unit]
+Description=wifi-qr: headless WiFi provisioning via M5Stack Unit QRCode (I2C)
+Documentation=file:///opt/wifi-qr
+# nmcli talks to NetworkManager over D-Bus, so NetworkManager must be up.
+After=NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+Type=simple
+# Optional overrides; see wifi-qr.env.example. The leading "-" makes it non-fatal if absent.
+EnvironmentFile=-/etc/default/wifi-qr
+Environment=PYTHONPATH=/opt/wifi-qr
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 -m wifi_qr
+Restart=on-failure
+RestartSec=5
+# root is required: /dev/i2c-1 access and nmcli connection add/up.
+User=root
+
+# Hardening. Do NOT add PrivateNetwork= or restrict D-Bus: nmcli needs the
+# system bus and NetworkManager needs the real network namespace.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+DevicePolicy=closed
+DeviceAllow=/dev/i2c-1 rw
+
+[Install]
+WantedBy=multi-user.target

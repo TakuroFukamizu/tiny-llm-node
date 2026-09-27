@@ -75,6 +75,7 @@ See docs directory for details:
 - assembly guide
 - software setup
 - benchmarks
+- WiFi provisioning by QR code (services/wifi-qr)
 
 ---
 
@@ -94,6 +95,7 @@ power.md
 bill_of_materials.md
 assembly.md
 software_setup.md
+services/wifi-qr/    # headless WiFi provisioning by QR code (optional)
 ```
 
 

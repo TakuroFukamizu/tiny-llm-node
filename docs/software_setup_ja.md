@@ -203,6 +203,14 @@ nvidia-smi     # ollama プロセスが VRAM 約 5.5 GB を確保しているこ
 
 ---
 
+## 8. QR コードによる WiFi 設定（任意）
+
+**2026-09-26 時点で実機未検証** — 上の各節と異なり机上設計です。
+
+Pi の I2C GPIO ピンに M5Stack 用 QR コードスキャナーユニットを接続すると、スマートフォンの WiFi 共有 QR コードをかざすだけでヘッドレスのノードを WiFi に参加させられます。`wifi-qr` デーモンが QR を解釈し、NetworkManager のプロファイルを作成します。配線は [hardware.md](hardware.md) を参照。概要は [services/wifi-qr/README_ja.md](../services/wifi-qr/README_ja.md)、実機での手順は [services/wifi-qr/RUNBOOK.md](../services/wifi-qr/RUNBOOK.md)（Claude Code に実行させる前提）を参照してください。
+
+---
+
 ## トラブルシューティング
 
 | 症状 | 原因 | 対処 |

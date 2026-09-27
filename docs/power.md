@@ -37,6 +37,7 @@ Elecbee 200W buck converter
 GPU (RTX4060): 100-120W
 Raspberry Pi 5: 10-12W
 PCIe board: 5-10W
+QR scanner (optional, Pi 5V rail): not measured
 
 Total:
 120-140W
