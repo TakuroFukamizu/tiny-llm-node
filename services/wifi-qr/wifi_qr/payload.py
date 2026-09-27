@@ -175,13 +175,15 @@ def _validate_password(security: Security, password: str | None) -> str | None:
         raise PayloadError(f"{security.name} network requires a password (P)")
     if security is Security.WEP:
         return password  # WEP key lengths are not validated.
-    if _PSK_MIN <= len(password) <= _PSK_MAX:
+    if security is Security.SAE:
+        # WPA3-SAE passwords have no 8-63 rule; NetworkManager exempts
+        # key-mgmt=sae from WPA-PSK validation (nm-setting-wireless-security.c).
         return password
-    if security is Security.WPA and _is_hex_psk(password):
+    if _PSK_MIN <= len(password) <= _PSK_MAX or _is_hex_psk(password):
         return password
     raise PayloadError(
-        f"{security.name} passphrase must be {_PSK_MIN}-{_PSK_MAX} characters"
-        + (f" or a {_PSK_HEX_LEN}-digit hex PSK" if security is Security.WPA else "")
+        f"WPA passphrase must be {_PSK_MIN}-{_PSK_MAX} characters"
+        f" or a {_PSK_HEX_LEN}-digit hex PSK"
     )
 
 

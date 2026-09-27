@@ -15,6 +15,7 @@ contain it is passed through :func:`_mask` first, and ``TimeoutExpired`` /
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 from dataclasses import dataclass
 from typing import Callable, Protocol, Sequence
@@ -22,6 +23,20 @@ from typing import Callable, Protocol, Sequence
 from wifi_qr.payload import Security, WifiCredential
 
 logger = logging.getLogger("wifi_qr.network")
+
+
+def nmcli_env() -> dict[str, str]:
+    """Environment for nmcli subprocesses: the current one with a C locale.
+
+    ``nmcli device wifi list`` translates the ACTIVE column even in terse
+    mode (``_("yes")`` in src/nmcli/devices.c), so under a Japanese locale
+    ``current_ssid()`` would look for ``yes:`` and never find ``はい:``.
+    """
+    env = dict(os.environ)
+    env["LC_ALL"] = "C"
+    env["LANG"] = "C"
+    env.pop("LANGUAGE", None)
+    return env
 
 MASK = "***"
 PROFILE_PREFIX = "wifi-qr-"
@@ -256,6 +271,7 @@ class NetworkManagerBackend:
             capture_output=True,
             text=True,
             timeout=self._timeout if timeout is None else timeout,
+            env=nmcli_env(),
         )
         logger.debug("exit %s: %s", proc.returncode, " ".join(_mask_argv(argv[:5])))
         return proc

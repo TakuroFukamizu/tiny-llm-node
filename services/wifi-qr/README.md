@@ -63,7 +63,7 @@ WIFI:T:WPA;S:Hidden;P:secret123;H:true;;
 |---|---|
 | `T` | Security: `WPA`, `WPA2`, `WPA3`, `SAE`, `WEP`, `nopass`, or empty (= open). Case-insensitive. `WPA`/`WPA2`/`WPA3` are all applied as `wpa-psk` (`WPA3` = WPA2/WPA3 transition mode); use `SAE` for a WPA3-only AP |
 | `S` | SSID (required) |
-| `P` | Password. Required for WPA/WEP; 8–63 characters for WPA |
+| `P` | Password. Required for WPA/SAE/WEP; 8–63 characters (or 64 hex digits) for WPA. SAE and WEP lengths are not checked |
 | `H` | `true` for a hidden SSID |
 
 Escaping: inside `S` and `P`, the characters `;` `:` `,` `\` must be written as `\;` `\:` `\,` `\\`.
@@ -143,7 +143,8 @@ sudo rm -f /etc/systemd/system/wifi-qr.service /etc/default/wifi-qr
 sudo rm -rf /opt/wifi-qr
 sudo systemctl daemon-reload
 # optional: remove the profiles the daemon created
-nmcli -t -f NAME connection show | grep '^wifi-qr-' | xargs -r -n1 sudo nmcli connection delete
+nmcli -t -f UUID,NAME connection show | awk -F: '$2 ~ /^wifi-qr-/ {print $1}' \
+  | xargs -r -n1 sudo nmcli connection delete uuid
 ```
 
 ---

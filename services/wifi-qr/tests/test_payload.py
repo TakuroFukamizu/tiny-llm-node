@@ -64,10 +64,18 @@ from wifi_qr.payload import (
             "WIFI:S:OpenCafe;;",
             WifiCredential("OpenCafe", None, Security.OPEN, False),
         ),
-        # WPA3 / SAE.
+        # WPA3 / SAE. No 8-63 rule: NetworkManager exempts key-mgmt=sae.
         (
             "WIFI:T:SAE;S:MyWPA3;P:secret123;;",
             WifiCredential("MyWPA3", "secret123", Security.SAE, False),
+        ),
+        (
+            "WIFI:T:SAE;S:MyWPA3;P:abc;;",
+            WifiCredential("MyWPA3", "abc", Security.SAE, False),
+        ),
+        (
+            "WIFI:T:SAE;S:MyWPA3;P:" + "x" * 64 + ";;",
+            WifiCredential("MyWPA3", "x" * 64, Security.SAE, False),
         ),
         # WEP: no length validation.
         (
@@ -257,9 +265,6 @@ def test_unsupported_auth_is_a_payload_error() -> None:
         "WIFI:T:WPA;S:MyNet;P:" + "x" * 64 + ";;",  # 64 chars, not hex
         "WIFI:T:WPA;S:MyNet;P:" + "x" * 65 + ";;",  # too long
         "WIFI:T:WPA;S:MyNet;P:" + "0" * 65 + ";;",  # hex but 65
-        "WIFI:T:SAE;S:MyNet;P:1234567;;",  # SAE too short
-        "WIFI:T:SAE;S:MyNet;P:" + "0123456789abcdef" * 4 + ";;",  # 64-hex only for WPA
-        "WIFI:T:SAE;S:MyNet;P:" + "x" * 64 + ";;",
         "WIFI:T:WPA;S:MyNet;P:" + "0" * 63 + "g;;",  # 64, one non-hex
         "WIFI:T:WPA4;S:MyNet;P:pass1234;;",  # unknown T
         "WIFI:T:PSK;S:MyNet;P:pass1234;;",

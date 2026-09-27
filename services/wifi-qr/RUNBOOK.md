@@ -378,7 +378,7 @@ A: `exit=0`。B: journal に `wifi-qr-once.service: Deactivated successfully.`�
 
 ```bash
 nmcli -t -f NAME,DEVICE connection show --active    # wifi-qr-<REAL_SSID>:wlan0 が含まれる
-nmcli -t -f ACTIVE,SSID device wifi | grep '^yes'   # yes:<REAL_SSID>
+LC_ALL=C nmcli -t -f ACTIVE,SSID device wifi | grep '^yes'   # yes:<REAL_SSID>
 ping -c 3 -I wlan0 1.1.1.1                          # 0% packet loss（外部到達できない閉域網なら GW へ）
 ls -l /etc/NetworkManager/system-connections/       # wifi-qr-<REAL_SSID>.nmconnection が -rw------- root
 ```
@@ -448,7 +448,7 @@ sudo journalctl -u wifi-qr --since '<T0>' --no-pager
 | `Active: failed` / `activating (auto-restart)` | `journalctl -u wifi-qr -n 50` の最後の traceback または `scanner gave up` 行を報告（起動リトライ 13 回が尽きた = I2C 無応答なら Step 4 に戻る） |
 | `scanner error (k/30)` が 30 回続いて `scanner gave up` で終了・再起動を繰り返す | I2C が応答していない（READY は読めるのに LENGTH/DATA で失敗し続ける場合もここに来る）。Step 4 に戻る |
 | ブザーは鳴るが `scan received` が出ない、または読み落としが多い | Step 5〜7 の手動プロセスが残って READY を取り合っている可能性。`pgrep -af wifi_qr` の PID を `systemctl show -p MainPID --value wifi-qr` と比べ、MainPID 以外があれば `sudo kill <PID>`（`pkill -f` は使わない） |
-| 同じ QR で `applying` が出てしまう | 重複抑止のバグ、または `current_ssid()` が取れていない。`nmcli -t -f ACTIVE,SSID device wifi` の出力を報告 |
+| 同じ QR で `applying` が出てしまう | 重複抑止のバグ、または `current_ssid()` が取れていない。`LC_ALL=C nmcli -t -f ACTIVE,SSID device wifi` の出力を報告 |
 | 切り替え後にログが `connect failed` | Step 7 の失敗時と同じ |
 
 ---
@@ -468,7 +468,7 @@ sudo reboot
 ```bash
 uptime
 systemctl is-active wifi-qr
-nmcli -t -f ACTIVE,SSID device wifi | grep '^yes'
+LC_ALL=C nmcli -t -f ACTIVE,SSID device wifi | grep '^yes'
 sudo journalctl -u wifi-qr -b --no-pager | head -20
 ```
 

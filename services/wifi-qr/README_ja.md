@@ -63,7 +63,7 @@ WIFI:T:WPA;S:Hidden;P:secret123;H:true;;
 |---|---|
 | `T` | 認証方式: `WPA`、`WPA2`、`WPA3`、`SAE`、`WEP`、`nopass`、または空（= オープン）。大文字小文字は区別しない。`WPA`/`WPA2`/`WPA3` はいずれも `wpa-psk` で適用する（`WPA3` は WPA2/WPA3 混在モードの意味）。WPA3-only の AP には `SAE` を使う |
 | `S` | SSID（必須） |
-| `P` | パスワード。WPA/WEP では必須。WPA は 8〜63 文字 |
+| `P` | パスワード。WPA/SAE/WEP では必須。WPA は 8〜63 文字（または 64 桁 hex）。SAE と WEP は長さを検証しない |
 | `H` | 隠し SSID なら `true` |
 
 エスケープ: `S` と `P` の中の `;` `:` `,` `\` は `\;` `\:` `\,` `\\` と書きます。
@@ -143,7 +143,8 @@ sudo rm -f /etc/systemd/system/wifi-qr.service /etc/default/wifi-qr
 sudo rm -rf /opt/wifi-qr
 sudo systemctl daemon-reload
 # 任意: デーモンが作成したプロファイルを削除する
-nmcli -t -f NAME connection show | grep '^wifi-qr-' | xargs -r -n1 sudo nmcli connection delete
+nmcli -t -f UUID,NAME connection show | awk -F: '$2 ~ /^wifi-qr-/ {print $1}' \
+  | xargs -r -n1 sudo nmcli connection delete uuid
 ```
 
 ---

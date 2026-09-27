@@ -118,7 +118,11 @@ deploy_code() {
   fi
   find "${INSTALL_DIR}" -type d -name __pycache__ -prune -exec rm -rf {} +
   find "${INSTALL_DIR}" -type f -name '*.pyc' -delete
-  log "deployed wifi_qr/ to ${INSTALL_DIR}/wifi_qr/"
+  # The checkout is owned by the SSH user; the service runs as root. Never
+  # leave root-executed code writable by an unprivileged account.
+  chown -R root:root "${INSTALL_DIR}"
+  chmod -R u=rwX,go=rX "${INSTALL_DIR}"
+  log "deployed wifi_qr/ to ${INSTALL_DIR}/wifi_qr/ (root:root, 0755/0644)"
 }
 
 # ---------------------------------------------------------------------------

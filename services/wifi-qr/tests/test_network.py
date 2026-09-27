@@ -98,6 +98,14 @@ def _assert_no_password(caplog: pytest.LogCaptureFixture) -> None:
 # --------------------------------------------------------------------------- #
 
 
+def test_nmcli_runs_with_c_locale(backend: NetworkManagerBackend, runner: FakeRunner) -> None:
+    """nmcli translates the ACTIVE column even in terse mode; force LC_ALL=C."""
+    runner.respond("wifi", stdout="yes:Home\n")
+    backend.current_ssid()
+    env = runner.kwargs[-1]["env"]
+    assert env["LC_ALL"] == "C" and env["LANG"] == "C" and "LANGUAGE" not in env
+
+
 def test_profile_name() -> None:
     assert profile_name("Home") == "wifi-qr-Home"
     assert profile_name("a b") == "wifi-qr-a b"

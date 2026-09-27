@@ -124,7 +124,7 @@ venv や pip は使わない（PEP 668 の外部管理環境を避け、apt の�
 - エスケープ `\;` `\:` `\,` `\\` を解除する
 - `T` は大文字小文字を無視し、`WPA` / `WPA2` / `WPA3` / `SAE` / `WEP` / `nopass` / 空を受け付ける。nmcli の key-mgmt への対応は `WPA` / `WPA2` / `WPA3` → `wpa-psk`（`WPA3` は WPA2/WPA3 混在モードの意味）、`SAE` → `sae`（WPA3-only の AP はこちら）、`WEP` → `none` + WEP キー、`nopass` / 空 → 指定なし。`WPA-EAP` および `E:` `A:` `I:` `PH2:` キーの存在は `UnsupportedAuth` として拒否する
 - `H:true` は隠し SSID として扱う
-- `S` が空、`WPA` 系・`WEP` で `P` が空、`WPA` 系で `P` が 8〜63 文字の範囲外（WPA-PSK の制約。WEP は長さ検証しない）、`WIFI:` 接頭辞なし、`S` または `P` に制御文字（0x00〜0x1F、0x7F。NUL は argv に渡せず、改行はプロファイル名の照合とログを壊す）、はいずれも `PayloadError`
+- `S` が空、`WPA` 系・`WEP` で `P` が空、`WPA` で `P` が 8〜63 文字の範囲外かつ 64 桁 hex でもない（WPA-PSK の制約。`SAE` は NetworkManager が長さ制限を免除するため、`WEP` と同様に長さ検証しない）、`WIFI:` 接頭辞なし、`S` または `P` に制御文字（0x00〜0x1F、0x7F。NUL は argv に渡せず、改行はプロファイル名の照合とログを壊す）、はいずれも `PayloadError`
 - 戻り値は `WifiCredential(ssid, password, security, hidden)` の frozen dataclass。`__repr__` でパスワードをマスクする
 
 **network.py — `NetworkManagerBackend`**
