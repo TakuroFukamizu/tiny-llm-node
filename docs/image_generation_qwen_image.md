@@ -380,7 +380,8 @@ An alternative to sd.cpp: run Qwen-Image-2.1 int8 **inside ComfyUI proper**, wit
 its node-graph UI reachable from another PC. This path is now validated — T2I,
 I2I and Edit all generate — but **sd.cpp + Vulkan is still preferred for
 production**: it uses less memory and runs on Vulkan, so it avoids the issue-#2
-brownout risk that this CUDA path carries.
+brownout risk that this CUDA path carries. For a head-to-head generation-time
+comparison of the two paths, see the [benchmark](qwen_image_benchmark.md).
 
 ### Why it works now
 
