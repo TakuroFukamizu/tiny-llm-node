@@ -73,6 +73,8 @@ graph TD
 - 組み立てガイド
 - ソフトウェア設定
 - ベンチマーク
+- [LLM サービング](docs/llm_serving_ja.md) — ローカル OpenAI 互換 API(llama.cpp + Vulkan)
+- [ゲーム AI バックエンド](docs/game_ai_backend_ja.md) — クライアント/Unity 向け API
 
 ---
 
