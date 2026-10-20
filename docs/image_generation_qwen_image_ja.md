@@ -11,30 +11,33 @@
 
 ## 結論(最重要)
 
-**unsloth の Qwen-Image-2.1 4bit GGUF は、ComfyUI ではなく
+**unsloth の Qwen-Image-2.1 4bit GGUF は
 [`stable-diffusion.cpp`](https://github.com/leejet/stable-diffusion.cpp) +
-Vulkan バックエンドで動く。** T2I / I2I / Edit の3機能すべてが、このノードで
-CUDA 負荷を落とす電源瞬断(ハードウェア問題 #2、後述)を起こさずに GPU 拡散を
-完走する。
+Vulkan バックエンドで動く(このノードの推奨経路)。** T2I / I2I / Edit の3機能
+すべてが、CUDA 負荷を落とす電源瞬断(ハードウェア問題 #2、後述)を起こさずに
+GPU 拡散を完走する。もう一つの経路として、Qwen-Image-2.1 の **int8 を ComfyUI
+本体**(CUDA)で動かすことも検証済み(ノードUIを別PCから使える)。ただし #2 の
+リスクを伴うため、既定は sd.cpp のまま。[付録A](#付録a--comfyui-int8-経路検証済み)参照。
 
-ComfyUI が使えない理由:
+通常利用で sd.cpp (Vulkan) を ComfyUI (CUDA) より優先する理由:
 
 1. **unsloth の 4bit GGUF には `general.architecture` メタデータが無く**、
-   sd.cpp 向けにビルドされているため、ComfyUI(および ComfyUI-GGUF)はモデル
-   アーキテクチャを判定できずロードを拒否する。ComfyUI-GGUF は
-   Qwen-Image-2.1 の DiT に非対応。
+   sd.cpp 向けにビルドされているため、ComfyUI(および ComfyUI-GGUF)は*その
+   ファイル*のアーキテクチャを判定できずロードを拒否する。ComfyUI では別途
+   int8/bf16 ウェイトが必要(付録A)。
 2. **ComfyUI ネイティブ経路は bf16 か int8 が必要**:
    - bf16 は 8GB VRAM に載らない。
    - int8 (`int8_convrot`) 経路は `comfy_kitchen` バックエンド依存で、これは
-     **CUDA 13.0 (cu130) ビルドの PyTorch** を要求する。最終的に cu130 の
-     aarch64 wheel (`torch 2.11.0+cu130`) は見つかり kitchen backend も
-     `available: True, disabled: False` にはなったが、ComfyUI 上の int8 生成の
-     最終テストは未完了であり、不要。sd.cpp 経路が全要件を満たしている。
+     **CUDA 13.0 (cu130) ビルドの PyTorch** を要求する。cu130 の aarch64 wheel
+     (`torch 2.11.0+cu130`) は実在し、この経路は検証済み(付録A)。ただし
+     **CUDA** 上で動くため、Vulkan sd.cpp が回避する #2 リスクを伴う。
 3. **sd.cpp は Qwen-Image-2.1 と Qwen3-VL をネイティブ認識**し、4bit GGUF を
-   そのまま動かす。これが実証済みのサポート経路であり、本書が扱う経路。
+   そのまま動かす。省メモリで、連続負荷でもクラッシュしない。本書が詳細に扱う
+   のはこの経路。
 
-> 放棄した ComfyUI int8 実験を再開する場合のみ
-> [付録A](#付録a--comfyui-int8-経路非推奨) を参照。通常利用では ComfyUI は無視。
+> ComfyUI のノードUI(例: 別PCから操作)が欲しい場合は
+> [付録A](#付録a--comfyui-int8-経路検証済み) を参照。無人運用や長時間生成では
+> sd.cpp を優先。
 
 ---
 
@@ -198,10 +201,10 @@ dl "$B/Qwen3-VL-8B-Instruct-GGUF/resolve/main/Qwen3-VL-8B-Instruct-UD-Q4_K_XL.gg
 dl "$B/Qwen3-VL-8B-Instruct-GGUF/resolve/main/mmproj-F16.gguf"                   models/text_encoders/Qwen3-VL-8B-Instruct-mmproj-F16.gguf
 ```
 
-> **VAE は unsloth 版**(`qwen_image_2.1_vae_bf16.safetensors`)を使う。sd.cpp は
-> これを正しくロードする。放棄した ComfyUI 実験由来の Comfy-Org 版 VAE
-> (`qwen_image_2.1_vae_comfyorg.safetensors`、同じく645MB)は **ComfyUI 専用**。
-> sd.cpp には渡さないこと(トラブルシュート参照)。
+> **sd.cpp では VAE は unsloth 版**(`qwen_image_2.1_vae_bf16.safetensors`)を
+> 使う(正しくロードされる)。Comfy-Org 版 VAE
+> (`qwen_image_2.1_vae_comfyorg.safetensors`、同じく645MB)は **ComfyUI int8
+> 経路専用**(付録A)。sd.cpp には渡さないこと(トラブルシュート参照)。
 
 ---
 
@@ -357,20 +360,69 @@ steps** に落とす。
 
 ---
 
-## 付録A — ComfyUI int8 経路(非推奨)
+## 付録A — ComfyUI int8 経路(検証済み)
 
-記録目的のみ。**不要**かつ完全には検証していない。目的は Qwen-Image-2.1 int8 を
-ComfyUI 本体で動かすことだった。放棄時点の状態:
+sd.cpp の代替として、Qwen-Image-2.1 **int8 を ComfyUI 本体**で動かし、ノードUIを
+別PCから使う経路。T2I / I2I / Edit の3モードとも生成できることを検証済み。ただし
+**本番は sd.cpp + Vulkan を推奨**(省メモリ、かつ Vulkan なので CUDA 経路が負う
+問題 #2 の瞬断リスクを避けられる)。
 
-- `torch 2.11.0+cu130`(aarch64/cp313)は**発見・導入できた**(piwheels の干渉を
+### いま動く理由
+
+- `torch 2.11.0+cu130`(aarch64/cp313)は**実在し導入できる**(piwheels の干渉を
   止めるため `PIP_CONFIG_FILE=/dev/null` 必須)。これで `comfy_kitchen` CUDA
   backend が有効化(`available: True, disabled: False`)し `int8_convrot` GEMM
-  ops が使えた。
-- int8 ネイティブ重みを取得:
-  `diffusion_models/qwen_image_2.1_int8_convrot.safetensors`(6.8GB)、
-  `text_encoders/qwen3vl_8b_int8_convrot.safetensors`(8.8GB)、Comfy-Org 版 VAE。
-- テキストエンコーダは **ネイティブ safetensors を標準 `CLIPLoader`**(type
-  `qwen_image`)でロードする必要があった(`CLIPLoaderGGUF` ではなく。12288次元
-  不整合を回避)。
-- 最終 int8 生成テストは未実行。たとえ動いても **CUDA 経路**で動くため、sd.cpp の
-  Vulkan 経路が回避している問題 #2 の瞬断リスクを負う。**sd.cpp を推奨。**
+  ops が使える。当初の「ComfyUI では不可能」という結論は、この wheel を見つけて
+  いなかったための誤り。
+
+### モデル(sd.cpp の GGUF に加えて int8 ネイティブ)
+
+| 役割 | ファイル | サイズ |
+|---|---|---|
+| 拡散 (DiT), int8 | `models/diffusion_models/qwen_image_2.1_int8_convrot.safetensors` | 6.8 GB |
+| テキストエンコーダ, int8 | `models/text_encoders/qwen3vl_8b_int8_convrot.safetensors` | 8.8 GB |
+| VAE (Comfy-Org) | `models/vae/qwen_image_2.1_vae_comfyorg.safetensors` | 645 MB |
+
+### 唯一のコツ
+
+テキストエンコーダは **ネイティブ safetensors を標準 `CLIPLoader`**(type
+`qwen_image`)でロードする(`CLIPLoaderGGUF` ではない — GGUF 版は 12288 次元を
+報告して不整合になる)。検証済みのノード構成:
+
+- `UNETLoader` → `qwen_image_2.1_int8_convrot.safetensors`, `weight_dtype=default`
+- `ModelSamplingAuraFlow` shift `3.1`
+- `CLIPLoader` → `qwen3vl_8b_int8_convrot.safetensors`, type `qwen_image`
+- `VAELoader` → `qwen_image_2.1_vae_comfyorg.safetensors`
+- `TextEncodeQwenImage21`(Edit は参照画像を `images` 入力へ + `vae`)
+- `KSampler` euler / simple, cfg `2.5`, steps 8〜20 → `VAEDecode` → `SaveImage`
+
+3モード分の既製ワークフローは
+[`scripts/qwen-image/comfyui-workflows/`](../scripts/qwen-image/comfyui-workflows/)
+にある。
+
+### 実行(別PCからUI操作)
+
+```bash
+scripts/qwen-image/comfyui-serve.sh    # LLMサービス停止 → 90Wキャップ → ComfyUIを 0.0.0.0:8188 で起動
+```
+
+ワークフローを一度コピーすると UI の **Workflows** サイドバーに表示される:
+
+```bash
+cp scripts/qwen-image/comfyui-workflows/*.json /home/pi/comfy/ComfyUI/user/default/workflows/
+```
+
+別PCから `http://<ノードIP>:8188` を開き、ワークフローを選び、プロンプトを編集して
+Run。I2I/Edit は `LoadImage` ノードに画像を入力(ブラウザにドラッグ)。512px/8step で
+ウォーム後 約83秒(初回は int8 モデルのロード時間が加算)。
+
+### 注意
+
+- **CUDA 経路 = 問題 #2 リスク。** まず 512px / 8〜10step に抑える(90W キャップは
+  serve スクリプトが適用)。無人・長時間なら sd.cpp を優先。
+- **Edit は一部シェイプで不安定。** CUDA/cuDNN 経路は特定の編集テンソル形状で
+  `cuDNN Frontend: No valid execution plans built` → segfault が出たことがある
+  (`TORCH_CUDNN_SDPA_ENABLED=0` や `--use-pytorch-cross-attention` でも回避不可)。
+  Edit がクラッシュするなら解像度/プロンプトを変えるか、sd.cpp の Edit 経路へ。
+- **VRAM:** 先に LLM API サービスを停止する必要がある(serve スクリプトが実施)。
+  終了後は `sudo systemctl start llama-primary llama-intent` で再開。

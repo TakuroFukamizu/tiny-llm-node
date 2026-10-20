@@ -14,31 +14,33 @@ Verified working on 2026-09-25 (Pi 5 8GB + RTX 4060 8GB, PCIe Gen 2 x1 eGPU).
 
 **The unsloth Qwen-Image-2.1 4-bit GGUF runs via
 [`stable-diffusion.cpp`](https://github.com/leejet/stable-diffusion.cpp) with
-the Vulkan backend — NOT via ComfyUI.** All three modes (T2I / I2I / Edit)
-generate images and run GPU diffusion to completion without the power-brownout
-crash that kills CUDA workloads on this node (hardware issue #2, below).
+the Vulkan backend — the recommended path on this node.** All three modes
+(T2I / I2I / Edit) generate images and run GPU diffusion to completion without
+the power-brownout crash that kills CUDA workloads on this node (hardware issue
+#2, below). A second, validated path runs Qwen-Image-2.1 **int8 inside ComfyUI**
+(CUDA) — handy for its node-graph UI — but it carries the #2 risk, so sd.cpp
+stays the default. See [Appendix A](#appendix-a--the-comfyui-int8-path-validated).
 
-Why not ComfyUI:
+Why sd.cpp (Vulkan) over ComfyUI (CUDA) for normal use:
 
 1. **The unsloth 4-bit GGUF has no `general.architecture` metadata** and is
    built for sd.cpp, so ComfyUI (and ComfyUI-GGUF) cannot identify the model
-   architecture and refuses to load it. ComfyUI-GGUF does not support the
-   Qwen-Image-2.1 DiT.
+   architecture and refuses to load *that* file. ComfyUI needs its own
+   int8/bf16 weights instead (Appendix A).
 2. The **ComfyUI-native path requires either bf16 or int8**:
    - bf16 weights do not fit in 8 GB VRAM.
    - The int8 (`int8_convrot`) path depends on the `comfy_kitchen` backend,
-     which requires **PyTorch built for CUDA 13.0 (cu130)**. A cu130 aarch64
-     wheel (`torch 2.11.0+cu130`) was eventually located and the kitchen
-     backend did report `available: True, disabled: False`, but the final
-     int8 generation test on ComfyUI was never completed and is not needed —
-     the sd.cpp path already satisfies every requirement.
-3. **sd.cpp recognizes Qwen-Image-2.1 and Qwen3-VL natively** and runs the
-   4-bit GGUF directly. This is the supported, proven path and the one this
-   document describes.
+     which requires **PyTorch built for CUDA 13.0 (cu130)**. The cu130 aarch64
+     wheel (`torch 2.11.0+cu130`) does exist and the path is now validated
+     (Appendix A) — but it runs on **CUDA**, which carries the issue-#2
+     brownout risk that Vulkan sd.cpp avoids.
+3. **sd.cpp recognizes Qwen-Image-2.1 and Qwen3-VL natively**, runs the 4-bit
+   GGUF directly, uses less memory, and is crash-stable under sustained load.
+   This is the path this document describes in full.
 
-> If you are resuming the abandoned ComfyUI int8 experiment, see
-> [Appendix A](#appendix-a--the-comfyui-int8-path-not-recommended). For normal
-> use, ignore ComfyUI entirely.
+> Want the ComfyUI node UI (e.g. driven from another PC)? See
+> [Appendix A](#appendix-a--the-comfyui-int8-path-validated). For unattended or
+> long runs, prefer sd.cpp.
 
 ---
 
@@ -207,10 +209,10 @@ dl "$B/Qwen3-VL-8B-Instruct-GGUF/resolve/main/Qwen3-VL-8B-Instruct-UD-Q4_K_XL.gg
 dl "$B/Qwen3-VL-8B-Instruct-GGUF/resolve/main/mmproj-F16.gguf"                   models/text_encoders/Qwen3-VL-8B-Instruct-mmproj-F16.gguf
 ```
 
-> **Use the unsloth VAE** (`qwen_image_2.1_vae_bf16.safetensors`). sd.cpp loads
-> it correctly. A Comfy-Org VAE (`qwen_image_2.1_vae_comfyorg.safetensors`,
-> also 645 MB) exists from the abandoned ComfyUI experiment — it is **only** for
-> ComfyUI; do not pass it to sd.cpp (see Troubleshooting).
+> **Use the unsloth VAE** (`qwen_image_2.1_vae_bf16.safetensors`) with sd.cpp —
+> it loads correctly. The Comfy-Org VAE (`qwen_image_2.1_vae_comfyorg.safetensors`,
+> also 645 MB) is **only** for the ComfyUI int8 path (Appendix A); do not pass it
+> to sd.cpp (see Troubleshooting).
 
 ---
 
@@ -372,22 +374,71 @@ Stability caveats (issue #2):
 
 ---
 
-## Appendix A — the ComfyUI int8 path (not recommended)
+## Appendix A — the ComfyUI int8 path (validated)
 
-Recorded for completeness; **not required** and never fully validated. The goal
-was to run Qwen-Image-2.1 int8 inside ComfyUI proper. Status when abandoned:
+An alternative to sd.cpp: run Qwen-Image-2.1 int8 **inside ComfyUI proper**, with
+its node-graph UI reachable from another PC. This path is now validated — T2I,
+I2I and Edit all generate — but **sd.cpp + Vulkan is still preferred for
+production**: it uses less memory and runs on Vulkan, so it avoids the issue-#2
+brownout risk that this CUDA path carries.
 
-- `torch 2.11.0+cu130` (aarch64/cp313) **was** found and installed
-  (`PIP_CONFIG_FILE=/dev/null` required to stop piwheels interfering), enabling
+### Why it works now
+
+- `torch 2.11.0+cu130` (aarch64/cp313) **does** exist and installs
+  (`PIP_CONFIG_FILE=/dev/null` is required to stop piwheels interfering), enabling
   the `comfy_kitchen` CUDA backend (`available: True, disabled: False`), which
-  provides the `int8_convrot` GEMM ops.
-- Native int8 weights were downloaded:
-  `diffusion_models/qwen_image_2.1_int8_convrot.safetensors` (6.8 GB) and
-  `text_encoders/qwen3vl_8b_int8_convrot.safetensors` (8.8 GB), plus the
-  Comfy-Org VAE.
-- The text encoder had to be loaded as **native safetensors via the standard
-  `CLIPLoader`** (type `qwen_image`), **not** `CLIPLoaderGGUF`, to avoid the
-  12288-dim mismatch.
-- The final int8 generation test was never run. Even if it works, it runs on
-  the **CUDA** path, which carries the issue-#2 brownout risk that the Vulkan
-  sd.cpp path avoids. **Prefer sd.cpp.**
+  provides the `int8_convrot` GEMM ops. The earlier "ComfyUI is impossible"
+  conclusion was wrong — it was based on not finding this wheel.
+
+### Models (native int8, in addition to the sd.cpp GGUFs)
+
+| Role | File | Size |
+|---|---|---|
+| Diffusion (DiT), int8 | `models/diffusion_models/qwen_image_2.1_int8_convrot.safetensors` | 6.8 GB |
+| Text encoder, int8 | `models/text_encoders/qwen3vl_8b_int8_convrot.safetensors` | 8.8 GB |
+| VAE (Comfy-Org) | `models/vae/qwen_image_2.1_vae_comfyorg.safetensors` | 645 MB |
+
+### The one trick
+
+Load the text encoder as **native safetensors via the standard `CLIPLoader`**
+(type `qwen_image`), **not** `CLIPLoaderGGUF` — the GGUF encoder reports 12288
+dims and mismatches. The validated node recipe:
+
+- `UNETLoader` → `qwen_image_2.1_int8_convrot.safetensors`, `weight_dtype=default`
+- `ModelSamplingAuraFlow` shift `3.1`
+- `CLIPLoader` → `qwen3vl_8b_int8_convrot.safetensors`, type `qwen_image`
+- `VAELoader` → `qwen_image_2.1_vae_comfyorg.safetensors`
+- `TextEncodeQwenImage21` (Edit: reference image into its `images` input + `vae`)
+- `KSampler` euler / simple, cfg `2.5`, steps 8–20 → `VAEDecode` → `SaveImage`
+
+Ready-made graphs for all three modes are in
+[`scripts/qwen-image/comfyui-workflows/`](../scripts/qwen-image/comfyui-workflows/).
+
+### Running it (UI from another PC)
+
+```bash
+scripts/qwen-image/comfyui-serve.sh    # stops the LLM services, caps 90 W, starts ComfyUI on 0.0.0.0:8188
+```
+
+Install the workflows once so they appear in the UI's **Workflows** sidebar:
+
+```bash
+cp scripts/qwen-image/comfyui-workflows/*.json /home/pi/comfy/ComfyUI/user/default/workflows/
+```
+
+Then open `http://<node-ip>:8188` from the other PC, pick a workflow, edit the
+prompt, and Run. I2I/Edit take their input via the `LoadImage` node (drag a file
+into the browser). Measured ~83 s per 512 px / 8-step generation once the model
+is warm (first run adds the int8 model load).
+
+### Caveats
+
+- **CUDA path = issue-#2 risk.** Keep to 512 px / 8–10 steps first; the 90 W cap
+  is applied by the serve script. For unattended or long runs, prefer sd.cpp.
+- **Edit can be unstable** on some shapes: the CUDA/cuDNN path has hit
+  `cuDNN Frontend: No valid execution plans built` → segfault on certain edit
+  tensor shapes (not worked around by `TORCH_CUDNN_SDPA_ENABLED=0` or
+  `--use-pytorch-cross-attention`). If Edit crashes, change resolution/prompt or
+  fall back to the sd.cpp Edit path.
+- **VRAM:** the LLM API services must be stopped first (the serve script does
+  this). Restart them afterward with `sudo systemctl start llama-primary llama-intent`.
