@@ -1,0 +1,14 @@
+[Unit]
+Description=Apply RTX 4060 power cap (brownout mitigation for #2)
+# Run after the GPU/driver is up, WITHOUT referencing multi-user.target (that caused an ordering cycle)
+After=systemd-modules-load.service
+Before=llama-primary.service llama-intent.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/nvidia-smi -pm 1
+ExecStart=/usr/bin/nvidia-smi -pl 90
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

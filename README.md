@@ -75,6 +75,8 @@ See docs directory for details:
 - assembly guide
 - software setup
 - benchmarks
+- [LLM serving](docs/llm_serving.md) — local OpenAI-compatible API (llama.cpp + Vulkan)
+- [game AI backend](docs/game_ai_backend.md) — client/Unity API handoff
 
 ---
 
