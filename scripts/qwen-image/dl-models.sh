@@ -1,5 +1,6 @@
 #!/bin/bash
-cd /home/pi/comfy/ComfyUI
+mkdir -p /home/pi/comfy/ComfyUI/models/unet /home/pi/comfy/ComfyUI/models/vae /home/pi/comfy/ComfyUI/models/text_encoders
+cd /home/pi/comfy/ComfyUI || exit 1
 B=https://huggingface.co/unsloth
 dl(){ echo "### $(date +%T) DL $2"; wget -c -q --show-progress -O "$2" "$1" 2>&1 | tail -1; }
 dl "$B/Qwen-Image-2.1-GGUF/resolve/main/qwen-image-2.1-Q4_K_M.gguf"        models/unet/qwen-image-2.1-Q4_K_M.gguf
